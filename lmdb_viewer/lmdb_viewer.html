@@ -1,0 +1,389 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>LMDB Viewer</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    .row { display: flex; gap: 20px; align-items: flex-start; }
+    .panel { min-width: 360px; max-width: 460px; }
+    canvas { border: 1px solid #999; image-rendering: pixelated; }
+    .meta { white-space: pre; background: #f6f6f6; padding: 8px; }
+    .section { margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; padding: 8px; }
+    .section-title { font-weight: 700; margin-bottom: 6px; }
+    .legend { margin-top: 8px; border-top: 1px solid #eee; padding-top: 8px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 2px 0; }
+    .swatch { width: 14px; height: 14px; border: 1px solid #666; display: inline-block; }
+    .poi-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+    .poi-group { margin: 6px 0; padding: 6px; background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
+    .poi-title { font-weight: 600; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h2>LMDB sample viewer</h2>
+
+  <div class="row">
+    <div class="panel">
+      <label>Map key:</label><br />
+      <select id="keySelect" style="width: 320px;"></select>
+
+      <div style="margin-top: 12px;">
+        <div class="section">
+          <div class="section-title">Image</div>
+          <label><input type="checkbox" id="showImage" checked /> Show image</label>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Segmentations channels</div>
+          <label><input type="checkbox" id="showLabel0" /> Walls / Rooms channel</label><br />
+          <label><input type="checkbox" id="showLabel1" /> Icons channel</label>
+          <div id="segLegend" class="legend"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Points of interest</div>
+          <div class="poi-actions">
+            <button id="selectAllPoiBtn" type="button">Select all</button>
+            <button id="clearAllPoiBtn" type="button">Clear all</button>
+          </div>
+          <div id="pointChannels"></div>
+          <p style="font-size:12px;color:#555;margin-top:8px;">Each POI is drawn as a short schematic: <b>I / L / T / X</b> junctions, <b>arrows</b> for openings (one arrow per channel; direction matches the dataset convention), <b>L</b> for icon corners — all with <b>fixed size in pixels</b>. Semantics match <code>draw_junction_from_dict</code> in <code>floortrans/plotting.py</code>.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <canvas id="cv" width="1024" height="1024"></canvas>
+      <h4>Sample meta</h4>
+      <div id="meta" class="meta"></div>
+    </div>
+  </div>
+
+<script>
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const metaBox = document.getElementById("meta");
+const keySelect = document.getElementById("keySelect");
+const pointChannelsDiv = document.getElementById("pointChannels");
+
+let currentKey = null;
+let baseImg = new Image();
+let label0 = new Image();
+let label1 = new Image();
+let points = {};
+let enabledPointChannels = new Set();
+const DEFAULT_CONFIG = {
+  room_classes: [],
+  icon_classes: [],
+  room_colors: [],
+  icon_colors: [],
+  poi_types: {
+    "0": "I-up", "1": "I-left", "2": "I-down", "3": "I-right",
+    "4": "L-up-left", "5": "L-up-right", "6": "L-down-right", "7": "L-down-left",
+    "8": "T-up", "9": "T-right", "10": "T-down", "11": "T-left", "12": "X-cross",
+    "13": "Opening-left", "14": "Opening-right", "15": "Opening-up", "16": "Opening-down",
+    "17": "Icon-upper-left", "18": "Icon-upper-right", "19": "Icon-lower-left", "20": "Icon-lower-right"
+  },
+  poi_groups: {
+    "Junctions": ["0","1","2","3","4","5","6","7","8","9","10","11","12"],
+    "Openings": ["13","14","15","16"],
+    "Icon corners": ["17","18","19","20"]
+  }
+};
+let config = DEFAULT_CONFIG;
+
+function randColor(seed) {
+  const x = (seed * 9301 + 49297) % 233280;
+  const r = (x % 200) + 30;
+  const g = ((x * 3) % 200) + 30;
+  const b = ((x * 7) % 200) + 30;
+  return `rgb(${r},${g},${b})`;
+}
+
+function poiColor(channelStr) {
+  const ch = parseInt(channelStr, 10);
+  if (!Number.isFinite(ch)) return "#444";
+  if (ch <= 12) return "#3b82f6";
+  if (ch <= 16) return "#ef4444";
+  return "#f97316";
+}
+
+/**
+ * Fixed branch length in **canvas pixels** — same for every POI (short, uniform).
+ * Canvas Y grows downward (same as image / matplotlib).
+ * `POI_STROKE_SCALE` upscales all POI strokes (arm length, line width, arrow head).
+ */
+const POI_STROKE_SCALE = 1.5;
+const POI_ARM_PX = 9 * POI_STROKE_SCALE;
+const POI_LINE_W = 2 * POI_STROKE_SCALE;
+/** Arrowhead size (px) for opening POIs — same stem length as junction rays */
+const OPENING_HEAD_BACK = 3.5 * POI_STROKE_SCALE;
+const OPENING_HEAD_WING = 2 * POI_STROKE_SCALE;
+
+/**
+ * Small arrow from (cx,cy) in direction (dx,dy) unit axis-aligned — opening endpoint.
+ */
+function drawOpeningArrow(ctx, cx, cy, dx, dy, color) {
+  const L = POI_ARM_PX;
+  const tipX = cx + dx * L;
+  const tipY = cy + dy * L;
+  const baseX = tipX - dx * OPENING_HEAD_BACK;
+  const baseY = tipY - dy * OPENING_HEAD_BACK;
+  const px = -dy * OPENING_HEAD_WING;
+  const py = dx * OPENING_HEAD_WING;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = POI_LINE_W;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "miter";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(baseX, baseY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(baseX + px, baseY + py);
+  ctx.lineTo(baseX - px, baseY - py);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPoiGlyph(ctx, cx, cy, channelStr, color) {
+  const ch = parseInt(channelStr, 10);
+  if (!Number.isFinite(ch)) return;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = POI_LINE_W;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const arm = POI_ARM_PX;
+  /** Unit axis-aligned ray from junction: dx,dy ∈ {-1,0,1} */
+  function ray(ddx, ddy) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + ddx * arm, cy + ddy * arm);
+    ctx.stroke();
+  }
+
+  // I (one arm)
+  if (ch === 0) ray(0, 1);
+  else if (ch === 1) ray(-1, 0);
+  else if (ch === 2) ray(0, -1);
+  else if (ch === 3) ray(1, 0);
+  // L (two arms)
+  else if (ch === 4) { ray(-1, 0); ray(0, -1); }
+  else if (ch === 5) { ray(1, 0); ray(0, -1); }
+  else if (ch === 6) { ray(1, 0); ray(0, 1); }
+  else if (ch === 7) { ray(-1, 0); ray(0, 1); }
+  // T (three arms)
+  else if (ch === 8) { ray(-1, 0); ray(1, 0); ray(0, 1); }
+  else if (ch === 9) { ray(-1, 0); ray(0, -1); ray(0, 1); }
+  else if (ch === 10) { ray(-1, 0); ray(1, 0); ray(0, -1); }
+  else if (ch === 11) { ray(1, 0); ray(0, -1); ray(0, 1); }
+  // X (four arms)
+  else if (ch === 12) { ray(-1, 0); ray(1, 0); ray(0, -1); ray(0, 1); }
+  // Openings: small arrows (direction inverted vs previous viewer)
+  else if (ch === 13) drawOpeningArrow(ctx, cx, cy, 1, 0, color);
+  else if (ch === 14) drawOpeningArrow(ctx, cx, cy, -1, 0, color);
+  else if (ch === 15) drawOpeningArrow(ctx, cx, cy, 0, 1, color);
+  else if (ch === 16) drawOpeningArrow(ctx, cx, cy, 0, -1, color);
+  // Icon corners (L, same arm length)
+  else if (ch === 17) { ray(1, 0); ray(0, 1); }
+  else if (ch === 18) { ray(-1, 0); ray(0, 1); }
+  else if (ch === 19) { ray(1, 0); ray(0, -1); }
+  else if (ch === 20) { ray(-1, 0); ray(0, -1); }
+}
+
+function renderSegLegend() {
+  const container = document.getElementById("segLegend");
+  if (!config) {
+    container.innerHTML = "";
+    return;
+  }
+  const show0 = document.getElementById("showLabel0").checked;
+  const show1 = document.getElementById("showLabel1").checked;
+  let html = "";
+
+  if (show0) {
+    html += "<div><b>Walls/Rooms classes</b></div>";
+    const roomEntries = config.room_classes.map((name, idx) => ({ name, idx }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    html += roomEntries.map((entry) => (
+      `<div class="legend-item"><span class="swatch" style="background:${config.room_colors[entry.idx]}"></span>${entry.idx}: ${entry.name}</div>`
+    )).join("");
+  }
+  if (show1) {
+    if (html) html += "<div style='margin-top:8px;'></div>";
+    html += "<div><b>Icons classes</b></div>";
+    const iconEntries = config.icon_classes.map((name, idx) => ({ name, idx }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    html += iconEntries.map((entry) => (
+      `<div class="legend-item"><span class="swatch" style="background:${config.icon_colors[entry.idx]}"></span>${entry.idx}: ${entry.name}</div>`
+    )).join("");
+  }
+  container.innerHTML = html;
+}
+
+function renderPoiSections() {
+  if (!config) config = DEFAULT_CONFIG;
+  const pointChannelsDiv = document.getElementById("pointChannels");
+  let groups = config.poi_groups || {};
+  const typeNames = config.poi_types || {};
+  if (!Object.keys(groups).length) {
+    groups = { "Points of interest": Object.keys(points).sort((a, b) => parseInt(a) - parseInt(b)) };
+  }
+
+  const order = [
+    { title: "junctions", keys: ["Junctions", "junctions"] },
+    { title: "openings", keys: ["Openings", "openings"] },
+    { title: "icons", keys: ["Icon corners", "icons", "icon corners"] },
+  ];
+
+  const availableChannels = new Set();
+  let html = "";
+  order.forEach(({ title, keys }) => {
+    const groupKey = keys.find((k) => Object.prototype.hasOwnProperty.call(groups, k));
+    if (!groupKey) return;
+    const channels = groups[groupKey];
+    const sortedChannels = [...channels].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    html += `<div class="poi-group"><div class="poi-title">${title}</div>`;
+    sortedChannels.forEach(ch => {
+      const chStr = String(ch);
+      availableChannels.add(chStr);
+      const count = (points[ch] || []).length;
+      const label = typeNames[ch] || `Type ${ch}`;
+      const chDisplay = String(ch).padStart(2, "0");
+      const isChecked = enabledPointChannels.has(chStr);
+      html += `<label class="legend-item"><input type="checkbox" data-ch="${ch}" ${isChecked ? "checked" : ""} />` +
+              `<span class="swatch" style="background:${poiColor(ch)}"></span>` +
+              `${chDisplay}: ${label} (${count})</label>`;
+    });
+    html += "</div>";
+  });
+  pointChannelsDiv.innerHTML = html;
+
+  enabledPointChannels = new Set(
+    [...enabledPointChannels].filter((ch) => availableChannels.has(String(ch)))
+  );
+
+  pointChannelsDiv.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const ch = cb.getAttribute("data-ch");
+      if (cb.checked) enabledPointChannels.add(ch);
+      else enabledPointChannels.delete(ch);
+      draw();
+    });
+  });
+}
+
+async function loadKeys() {
+  const keys = await (await fetch("/api/keys")).json();
+  keySelect.innerHTML = keys.map(k => `<option>${k}</option>`).join("");
+  if (keys.length > 0) {
+    keySelect.value = keys[0];
+    await loadSample();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  if (document.getElementById("showImage").checked && baseImg.complete) {
+    ctx.drawImage(baseImg, 0, 0, cv.width, cv.height);
+  }
+
+  if (document.getElementById("showLabel0").checked && label0.complete) {
+    ctx.globalAlpha = 0.35;
+    ctx.drawImage(label0, 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = 1.0;
+  }
+
+  if (document.getElementById("showLabel1").checked && label1.complete) {
+    ctx.globalAlpha = 0.35;
+    ctx.drawImage(label1, 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = 1.0;
+  }
+
+  const sx = cv.width / baseImg.naturalWidth;
+  const sy = cv.height / baseImg.naturalHeight;
+
+  for (const [ch, pts] of Object.entries(points)) {
+    if (!enabledPointChannels.has(ch)) continue;
+    const col = poiColor(ch) || randColor(parseInt(ch, 10) || 1);
+    for (const p of pts) {
+      const cx = p[0] * sx;
+      const cy = p[1] * sy;
+      drawPoiGlyph(ctx, cx, cy, ch, col);
+    }
+  }
+}
+
+async function loadSample() {
+  currentKey = keySelect.value;
+  if (!currentKey) return;
+
+  const meta = await (await fetch(`/api/sample?key=${encodeURIComponent(currentKey)}`)).json();
+  metaBox.textContent = JSON.stringify(meta, null, 2);
+
+  baseImg.src = `/api/image?key=${encodeURIComponent(currentKey)}`;
+  label0.src = `/api/label_channel?key=${encodeURIComponent(currentKey)}&c=0`;
+  label1.src = `/api/label_channel?key=${encodeURIComponent(currentKey)}&c=1`;
+
+  points = await (await fetch(`/api/points?key=${encodeURIComponent(currentKey)}`)).json();
+  renderPoiSections();
+
+  await Promise.all([
+    new Promise(r => baseImg.onload = r),
+    new Promise(r => label0.onload = r),
+    new Promise(r => label1.onload = r),
+  ]);
+
+  cv.width = baseImg.naturalWidth;
+  cv.height = baseImg.naturalHeight;
+  renderSegLegend();
+  draw();
+}
+
+document.getElementById("keySelect").addEventListener("change", loadSample);
+["showImage", "showLabel0", "showLabel1"].forEach(id => {
+  document.getElementById(id).addEventListener("change", draw);
+});
+["showLabel0", "showLabel1"].forEach(id => {
+  document.getElementById(id).addEventListener("change", renderSegLegend);
+});
+
+document.getElementById("selectAllPoiBtn").addEventListener("click", () => {
+  document.querySelectorAll("#pointChannels input[type=checkbox]").forEach(cb => {
+    cb.checked = true;
+    enabledPointChannels.add(cb.getAttribute("data-ch"));
+  });
+  draw();
+});
+
+document.getElementById("clearAllPoiBtn").addEventListener("click", () => {
+  document.querySelectorAll("#pointChannels input[type=checkbox]").forEach(cb => {
+    cb.checked = false;
+  });
+  enabledPointChannels.clear();
+  draw();
+});
+
+async function init() {
+  try {
+    const res = await fetch("/api/config");
+    if (res.ok) {
+      const serverConfig = await res.json();
+      config = { ...DEFAULT_CONFIG, ...serverConfig };
+    }
+  } catch (e) {
+    config = DEFAULT_CONFIG;
+  }
+  await loadKeys();
+  renderPoiSections();
+}
+
+init();
+</script>
+</body>
+</html>

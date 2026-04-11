@@ -15,3 +15,5 @@ svgpathtools
 
 matplotlib
 tensorboardX
+
+flask
