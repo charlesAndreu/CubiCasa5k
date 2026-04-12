@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import pandas as pd
 from datetime import datetime
 from floortrans.loaders.augmentations import (
     RandomCropToSizeTorch,
@@ -22,13 +21,11 @@ from floortrans.loaders.augmentations import (
 )
 from torchvision.transforms import RandomChoice
 from torch.utils import data
-from torch.nn.functional import softmax
 from tqdm import tqdm
 
 from floortrans.loaders import FloorplanSVG
 from floortrans.models import hg_furukawa_original
-from floortrans.losses import UncertaintyLoss
-from floortrans.metrics import get_px_acc, runningScore
+from floortrans.metrics import runningScore
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import matplotlib.pyplot as plt
@@ -42,6 +39,20 @@ class SegmentationMapTrainer:
         self.writer = writer
         self.logger = logger
         self.n_output_channels = 12 if self.segmentation_map == "room" else 11
+
+    def prepare_segmentation_target(self, labels, output_hw):
+        """
+        Prepare the segmentation target for the CrossEntropyLoss.
+        Room/icon map from full label stack -> (N, H, W) long for CrossEntropyLoss.
+
+        labels: (N, 23, H, W). Channel 21 = room indices, 22 = icon indices.
+        output_hw: (H, W) must match logits spatial size.
+        """
+        ch = 21 if self.segmentation_map == "room" else 22
+        t = labels[:, ch : ch + 1, :, :].float()
+        if t.shape[2:] != output_hw:
+            t = F.interpolate(t, size=output_hw, mode="nearest")
+        return t.squeeze(1).long()
 
     def data_loader(self):
         # Augmentation setup
@@ -149,16 +160,17 @@ class SegmentationMapTrainer:
         self.writer.add_graph(model, dummy)
 
     def setup_optimizer(self, model):
-        params = [
-            {"params": model.parameters(), "lr": self.args.l_rate},
-        ]
         if self.args.optimizer == "adam-patience":
-            optimizer = torch.optim.Adam(params, eps=1e-8, betas=(0.9, 0.999))
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            )
             scheduler = ReduceLROnPlateau(
                 optimizer, "min", patience=self.args.patience, factor=0.5
             )
         elif self.args.optimizer == "adam-patience-previous-best":
-            optimizer = torch.optim.Adam(params, eps=1e-8, betas=(0.9, 0.999))
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            )
             scheduler = None
         elif self.args.optimizer == "sgd":
 
@@ -166,7 +178,11 @@ class SegmentationMapTrainer:
                 return (1 - epoch / self.args.n_epoch) ** 0.9
 
             optimizer = torch.optim.SGD(
-                params, momentum=0.9, weight_decay=10**-4, nesterov=True
+                model.parameters(),
+                lr=self.args.l_rate,
+                momentum=0.9,
+                weight_decay=10**-4,
+                nesterov=True,
             )
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
         elif self.args.optimizer == "adam-scheduler":
@@ -174,8 +190,12 @@ class SegmentationMapTrainer:
             def lr_drop(epoch):
                 return 0.5 ** np.floor(epoch / self.args.l_rate_drop)
 
-            optimizer = torch.optim.Adam(params, eps=1e-8, betas=(0.9, 0.999))
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            )
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
+        else:
+            raise ValueError(f"Invalid optimizer: {self.args.optimizer}")
 
         return optimizer, scheduler
 
@@ -185,7 +205,6 @@ class SegmentationMapTrainer:
             json.dump(vars(self.args), out, indent=4)
 
         trainloader, valloader = self.data_loader()
-        input_slice = [21, 12, 11]
         model = self.model_setup()
         self.draw_tensorboard_graph(model)
         optimizer, scheduler = self.setup_optimizer(model)
@@ -197,52 +216,51 @@ class SegmentationMapTrainer:
         best_train_loss = np.inf
         best_acc = 0
         start_epoch = 0
-        running_metrics_room_val = runningScore(input_slice[1])
-        running_metrics_icon_val = runningScore(input_slice[2])
+        running_metrics_map_val = runningScore(self.n_output_channels)
         best_val_loss_variance = np.inf
         no_improvement = 0
 
         # train for n_epochs
         for epoch in range(start_epoch, self.args.n_epoch):
             model.train()
-            losses = pd.DataFrame()
+            epoch_train_losses = []
+            # ------------------------------------------------------------
             # Training
+            # ------------------------------------------------------------
             for i, samples in tqdm(
                 enumerate(trainloader), total=len(trainloader), ncols=80, leave=False
             ):
                 images = samples["image"].cuda(non_blocking=True)
                 labels = samples["label"].cuda(non_blocking=True)
-
+                # outputs are logits: (N, n_output_channels, H, W)
                 outputs = model(images)
-
-                loss = criterion(outputs, labels)
-                losses = losses.append(loss, ignore_index=True)
+                # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
+                target = self.prepare_segmentation_target(labels, outputs.shape[2:])
+                loss = criterion(outputs, target)
+                epoch_train_losses.append(loss.item())
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            train_loss = losses.mean()
+            train_loss = float(np.mean(epoch_train_losses))
 
             self.logger.info(
                 "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
-            self.writer.add_scalars("training/loss", train_loss, global_step=1 + epoch)
-            current_lr = {
-                "base": optimizer.param_groups[0]["lr"],
-                "var": optimizer.param_groups[1]["lr"],
-            }
-            self.writer.add_scalars("training/lr", current_lr, global_step=1 + epoch)
+            current_lr = optimizer.param_groups[0]["lr"]
+            self.writer.add_scalars(
+                "training",
+                {"loss": float(train_loss), "lr": float(current_lr)},
+                global_step=1 + epoch,
+            )
 
+            # ------------------------------------------------------------
             # Validation
+            # ------------------------------------------------------------
             model.eval()
-            val_losses = pd.DataFrame()
-            val_variances = pd.DataFrame()
-            val_ss = pd.DataFrame()
-            px_rooms = 0
-            px_icons = 0
-            total_px = 0
+            val_losses = []
             for i_val, samples_val in tqdm(
                 enumerate(valloader), total=len(valloader), ncols=80, leave=False
             ):
@@ -251,60 +269,31 @@ class SegmentationMapTrainer:
                     labels_val = samples_val["label"].cuda(non_blocking=True)
 
                     outputs = model(images_val)
-                    labels_val = F.interpolate(
-                        labels_val,
-                        size=outputs.shape[2:],
-                        mode="bilinear",
-                        align_corners=False,
+                    target = self.prepare_segmentation_target(
+                        labels_val, outputs.shape[2:]
                     )
-                    loss = criterion(outputs, labels_val)
+                    loss = criterion(outputs, target)
+                    val_losses.append(loss.item())
 
-                    room_pred = (
-                        outputs[0, input_slice[0] : input_slice[0] + input_slice[1]]
-                        .argmax(0)
-                        .detach()
-                        .cpu()
-                        .numpy()
-                    )
-                    room_gt = labels_val[0, input_slice[0]].detach().cpu().numpy()
-                    running_metrics_room_val.update(room_gt, room_pred)
+                    # Per-pixel class predictions: (N, C, H, W) -> argmax over C
+                    map_pred = outputs.argmax(dim=1)[0].detach().cpu().numpy()
+                    map_gt = target[0].detach().cpu().numpy()
+                    running_metrics_map_val.update([map_gt], [map_pred])
 
-                    icon_pred = (
-                        outputs[0, input_slice[0] + input_slice[1] :]
-                        .argmax(0)
-                        .detach()
-                        .cpu()
-                        .numpy()
-                    )
-                    icon_gt = labels_val[0, input_slice[0] + 1].detach().cpu().numpy()
-                    running_metrics_icon_val.update(icon_gt, icon_pred)
-                    total_px += outputs[0, 0].numel()
-                    pr, pi = get_px_acc(outputs[0], labels_val[0], input_slice, 0)
-                    px_rooms += float(pr)
-                    px_icons += float(pi)
-
-                    val_losses = val_losses.append(
-                        criterion.get_loss(), ignore_index=True
-                    )
-                    val_variances = val_variances.append(
-                        criterion.get_var(), ignore_index=True
-                    )
-                    val_ss = val_ss.append(criterion.get_s(), ignore_index=True)
-
-            val_loss = val_losses.mean()
-            # print("CNN done", val_mid-val_start)
-            val_variance = val_variances.mean()
-            self.logger.info("val_loss: " + str(val_loss))
-            self.writer.add_scalars("validation loss", val_loss, global_step=1 + epoch)
-            # print(val_variance)
-            self.writer.add_scalars(
-                "validation variance", val_variance, global_step=1 + epoch
+            val_loss_mean = float(np.mean(val_losses))
+            self.logger.info("val_loss: %.4f" % val_loss_mean)
+            self.writer.add_scalar(
+                "validation/loss", val_loss_mean, global_step=1 + epoch
             )
+
+            # Learning rate scheduler
+            # adam-patience: reduce learning rate when validation loss plateaus
             if self.args.optimizer == "adam-patience":
-                scheduler.step(val_loss["total loss with variance"])
+                scheduler.step(val_loss_mean)
+            # adam-patience-previous-best: reduce learning rate when validation loss plateaus and save the best model
             elif self.args.optimizer == "adam-patience-previous-best":
-                if best_val_loss_variance > val_loss["total loss with variance"]:
-                    best_val_loss_variance = val_loss["total loss with variance"]
+                if best_val_loss_variance > val_loss_mean:
+                    best_val_loss_variance = val_loss_mean
                     no_improvement = 0
                 else:
                     no_improvement += 1
@@ -322,57 +311,30 @@ class SegmentationMapTrainer:
                         optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
                     no_improvement = 0
 
+            # sgd: reduce learning rate when validation loss plateaus
+            # adam-scheduler: reduce learning rate when validation loss plateaus
             elif self.args.optimizer in ["sgd", "adam-scheduler"]:
                 scheduler.step(epoch + 1)
 
-            val_variance = val_variances.mean()
-            val_s = val_ss.mean()
-            self.logger.info("val_loss: " + str(val_loss))
-            room_score, room_class_iou = running_metrics_room_val.get_scores()
+            score, class_iou = running_metrics_map_val.get_scores()
             self.writer.add_scalars(
-                "validation/room/general", room_score, global_step=1 + epoch
+                "validation/map/general", score, global_step=1 + epoch
             )
             self.writer.add_scalars(
-                "validation/room/IoU",
-                room_class_iou["Class IoU"],
+                "validation/map/IoU",
+                class_iou["Class IoU"],
                 global_step=1 + epoch,
             )
             self.writer.add_scalars(
-                "validation/room/Acc",
-                room_class_iou["Class Acc"],
+                "validation/map/Acc",
+                class_iou["Class Acc"],
                 global_step=1 + epoch,
             )
-            running_metrics_room_val.reset()
+            running_metrics_map_val.reset()
 
-            icon_score, icon_class_iou = running_metrics_icon_val.get_scores()
-            self.writer.add_scalars(
-                "validation/icon/general", icon_score, global_step=1 + epoch
-            )
-            self.writer.add_scalars(
-                "validation/icon/IoU",
-                icon_class_iou["Class IoU"],
-                global_step=1 + epoch,
-            )
-            self.writer.add_scalars(
-                "validation/icon/Acc",
-                icon_class_iou["Class Acc"],
-                global_step=1 + epoch,
-            )
-            running_metrics_icon_val.reset()
-
-            self.writer.add_scalars("validation/loss", val_loss, global_step=1 + epoch)
-            self.writer.add_scalars(
-                "validation/variance", val_variance, global_step=1 + epoch
-            )
-            self.writer.add_scalars("validation/s", val_s, global_step=1 + epoch)
-
-            #  “loss with variance” is the training objective that includes learned per-task uncertainty weights.
-            #  The plain “total loss” is the sum of the raw task losses without that weighting — mainly for logging.
-            if val_loss["total loss with variance"] < best_loss_var:
-                best_loss_var = val_loss["total loss with variance"]
-                self.logger.info(
-                    "Best validation loss with variance found saving model..."
-                )
+            if val_loss_mean < best_loss_var:
+                best_loss_var = val_loss_mean
+                self.logger.info("Best validation loss found saving model...")
                 state = {
                     "epoch": epoch + 1,
                     "model_state": model.state_dict(),
@@ -413,55 +375,31 @@ class SegmentationMapTrainer:
                                     )
 
                             outputs = model(images_val)
-
-                            # add_predictions_tensorboard(writer, outputs, epoch)
-                            pred_arr = torch.split(outputs, input_slice, 1)
-                            heatmap_pred, rooms_pred, icons_pred = pred_arr
-
-                            rooms_pred = softmax(rooms_pred, 1).detach().cpu().numpy()
-                            icons_pred = softmax(icons_pred, 1).detach().cpu().numpy()
-
-                            label = "Image " + str(i) + " prediction/Channel "
-
-                            for j, l in enumerate(np.squeeze(heatmap_pred)):
-                                fig = plt.figure(figsize=(18, 12))
-                                plot = fig.add_subplot(111)
-                                cax = plot.imshow(l, vmin=0, vmax=1)
-                                fig.colorbar(cax)
-                                self.writer.add_figure(
-                                    label + str(j), fig, global_step=1 + epoch
-                                )
-
+                            pred_map = (
+                                outputs[0].argmax(dim=0).detach().cpu().numpy()
+                            )
                             fig = plt.figure(figsize=(18, 12))
                             plot = fig.add_subplot(111)
                             cax = plot.imshow(
-                                np.argmax(np.squeeze(rooms_pred), axis=0),
+                                pred_map,
                                 vmin=0,
-                                vmax=19,
+                                vmax=self.n_output_channels - 1,
                                 cmap=plt.cm.tab20,
                             )
                             fig.colorbar(cax)
                             self.writer.add_figure(
-                                label + str(j + 1), fig, global_step=1 + epoch
-                            )
-
-                            fig = plt.figure(figsize=(18, 12))
-                            plot = fig.add_subplot(111)
-                            cax = plot.imshow(
-                                np.argmax(np.squeeze(icons_pred), axis=0),
-                                vmin=0,
-                                vmax=19,
-                                cmap=plt.cm.tab20,
-                            )
-                            fig.colorbar(cax)
-                            self.writer.add_figure(
-                                label + str(j + 2), fig, global_step=1 + epoch
+                                "Image "
+                                + str(i)
+                                + " prediction/"
+                                + self.segmentation_map,
+                                fig,
+                                global_step=1 + epoch,
                             )
 
                 first_best = False
 
-            if val_loss["total loss"] < best_loss:
-                best_loss = val_loss["total loss"]
+            if val_loss_mean < best_loss:
+                best_loss = val_loss_mean
                 self.logger.info("Best validation loss found saving model...")
                 state = {
                     "epoch": epoch + 1,
@@ -472,7 +410,7 @@ class SegmentationMapTrainer:
                 }
                 torch.save(state, self.log_dir + "/model_best_val_loss.pkl")
 
-            px_acc = room_score["Mean Acc"] + icon_score["Mean Acc"]
+            px_acc = score["Mean Acc"]
             if px_acc > best_acc:
                 best_acc = px_acc
                 self.logger.info("Best validation pixel accuracy found saving model...")
@@ -484,8 +422,8 @@ class SegmentationMapTrainer:
                 }
                 torch.save(state, self.log_dir + "/model_best_val_acc.pkl")
 
-            if avg_loss < best_train_loss:
-                best_train_loss = avg_loss
+            if train_loss < best_train_loss:
+                best_train_loss = train_loss
                 self.logger.info("Best training loss with variance...")
                 state = {
                     "epoch": epoch + 1,

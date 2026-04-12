@@ -22,7 +22,7 @@ class runningScore(object):
         mask = (label_true >= 0) & (label_true < n_class)
         hist = np.bincount(
             n_class * label_true[mask].astype(int) + label_pred[mask],
-            minlength=n_class ** 2,
+            minlength=n_class**2,
         ).reshape(n_class, n_class)
         return hist
 
@@ -34,10 +34,10 @@ class runningScore(object):
 
     def get_scores(self):
         """Returns accuracy score evaluation result.
-            - overall accuracy
-            - mean accuracy
-            - mean IU
-            - fwavacc
+        - overall accuracy
+        - mean accuracy
+        - mean IU
+        - fwavacc
         """
         hist = self.confusion_matrix
         acc = np.diag(hist).sum() / hist.sum()
@@ -58,10 +58,7 @@ class runningScore(object):
                 "FreqW Acc": fwavacc,
                 "Mean IoU": mean_iu,
             },
-            {
-                "Class IoU": cls_iu,
-                "Class Acc": cls_acc
-            }
+            {"Class IoU": cls_iu, "Class Acc": cls_acc},
         )
 
     def reset(self):
@@ -84,8 +81,13 @@ def up_sample_predictions(pred, size):
 
     # In the paper they use bi-cubic interpolation here also...
     # Don't understand why
-    pred = transform.resize(pred, (pred_count, channels, height, width),
-                            order=3, mode='constant', anti_aliasing=False)
+    pred = transform.resize(
+        pred,
+        (pred_count, channels, height, width),
+        order=3,
+        mode="constant",
+        anti_aliasing=False,
+    )
 
     return pred
 
@@ -97,11 +99,17 @@ def get_px_acc(pred, target, input_slice, sub=1):
     rooms_target = target[input_slice[0]].type(torch.cuda.LongTensor) - sub
     rooms_pos = torch.eq(rooms_pred, rooms_target).sum()
 
-    icons_target = target[input_slice[0]+1].type(torch.cuda.LongTensor) - sub
+    icons_target = target[input_slice[0] + 1].type(torch.cuda.LongTensor) - sub
     icons_pred = softmax(icons_pred, 0).argmax(0)
     icons_pos = torch.eq(icons_pred, icons_target).sum()
 
     return rooms_pos, icons_pos
+
+
+def get_simple_map_px_acc(pred, target, sub=1):
+    pred = softmax(pred, 0).argmax(0)
+    target = target.type(torch.cuda.LongTensor) - sub
+    return torch.eq(pred, target).sum()
 
 
 def pixel_accuracy(label, pred):
@@ -111,27 +119,29 @@ def pixel_accuracy(label, pred):
     return float(sum_correct) / float(total_px)
 
 
-def polygons_to_tensor(polygons_val, types_val, room_polygons_val, room_types_val, size, split=[12, 11]):
+def polygons_to_tensor(
+    polygons_val, types_val, room_polygons_val, room_types_val, size, split=[12, 11]
+):
     ten = np.zeros((sum(split), size[0], size[1]))
 
     for i, pol_type in enumerate(room_types_val):
         mask = shp_mask(room_polygons_val[i], np.arange(size[1]), np.arange(size[0]))
-        ten[pol_type['class']][mask] = 1
+        ten[pol_type["class"]][mask] = 1
 
     for i, pol_type in enumerate(types_val):
-        if pol_type['type'] == 'icon':
+        if pol_type["type"] == "icon":
             d = split[0]
         else:
             d = 0
         jj, ii = draw.polygon(polygons_val[i][:, 1], polygons_val[i][:, 0])
-        ten[pol_type['class'] + d][jj, ii] = 1
+        ten[pol_type["class"] + d][jj, ii] = 1
 
     return ten
 
 
 def get_evaluation_tensors(val, model, split, logger, rotate=True, n_classes=44):
-    images_val = val['image'].cuda()
-    labels_val = val['label']
+    images_val = val["image"].cuda()
+    labels_val = val["label"]
     height = labels_val.shape[2]
     width = labels_val.shape[3]
     img_size = (height, width)
@@ -144,14 +154,16 @@ def get_evaluation_tensors(val, model, split, logger, rotate=True, n_classes=44)
         for i, r in enumerate(rotations):
             forward, back = r
             # We rotate first the image
-            rot_image = rot(images_val, 'tensor', forward)
+            rot_image = rot(images_val, "tensor", forward)
             pred = model(rot_image)
             # We rotate prediction back
-            pred = rot(pred, 'tensor', back)
+            pred = rot(pred, "tensor", back)
             # We fix heatmaps
-            pred = rot(pred, 'points', back)
+            pred = rot(pred, "points", back)
             # We make sure the size is correct
-            pred = interpolate(pred, size=(height, width), mode='bilinear', align_corners=True)
+            pred = interpolate(
+                pred, size=(height, width), mode="bilinear", align_corners=True
+            )
             # We add the prediction to output
             prediction[i] = pred[0]
             logger.info("flip: " + str(i))
@@ -161,23 +173,30 @@ def get_evaluation_tensors(val, model, split, logger, rotate=True, n_classes=44)
         prediction = model(images_val)
 
     heatmaps_val, rooms_val, icons_val = post_prosessing.split_validation(
-        labels_val, img_size, split)
+        labels_val, img_size, split
+    )
     heatmaps, rooms, icons = post_prosessing.split_prediction(
-        prediction, img_size, split)
-    
+        prediction, img_size, split
+    )
+
     rooms_seg = np.argmax(rooms, axis=0)
     icons_seg = np.argmax(icons, axis=0)
 
     all_opening_types = [1, 2]  # Window, Door
     polygons, types, room_polygons, room_types = post_prosessing.get_polygons(
-        (heatmaps, rooms, icons), 0.4, all_opening_types)
+        (heatmaps, rooms, icons), 0.4, all_opening_types
+    )
     logger.info("Prediction post processing done")
 
     predicted_classes = polygons_to_tensor(
-        polygons, types, room_polygons, room_types, img_size)
-    
-    pol_rooms = np.argmax(predicted_classes[:split[1]], axis=0)
-    pol_icons = np.argmax(predicted_classes[split[1]:], axis=0)
-    
-    
-    return labels_val[0, 21:].data.numpy(), np.concatenate(([rooms_seg], [icons_seg]), axis=0), np.concatenate(([pol_rooms], [pol_icons]), axis=0)
+        polygons, types, room_polygons, room_types, img_size
+    )
+
+    pol_rooms = np.argmax(predicted_classes[: split[1]], axis=0)
+    pol_icons = np.argmax(predicted_classes[split[1] :], axis=0)
+
+    return (
+        labels_val[0, 21:].data.numpy(),
+        np.concatenate(([rooms_seg], [icons_seg]), axis=0),
+        np.concatenate(([pol_rooms], [pol_icons]), axis=0),
+    )
