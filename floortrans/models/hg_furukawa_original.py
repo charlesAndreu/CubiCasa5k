@@ -11,23 +11,29 @@ class Residual(nn.Module):
         self.numOut = numOut
         self.bn = nn.BatchNorm2d(self.numIn)
         self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.Conv2d(self.numIn, int(
-            self.numOut / 2), bias=True, kernel_size=1)
+        self.conv1 = nn.Conv2d(
+            self.numIn, int(self.numOut / 2), bias=True, kernel_size=1
+        )
         self.bn1 = nn.BatchNorm2d(int(self.numOut / 2))
-        self.conv2 = nn.Conv2d(int(self.numOut / 2), int(self.numOut / 2),
-                               bias=True, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(
+            int(self.numOut / 2),
+            int(self.numOut / 2),
+            bias=True,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
         self.bn2 = nn.BatchNorm2d(int(self.numOut / 2))
-        self.conv3 = nn.Conv2d(int(self.numOut / 2),
-                               self.numOut, bias=True, kernel_size=1)
+        self.conv3 = nn.Conv2d(
+            int(self.numOut / 2), self.numOut, bias=True, kernel_size=1
+        )
 
         if self.numIn != self.numOut:
-            self.conv4 = nn.Conv2d(
-                self.numIn, self.numOut, bias=True, kernel_size=1)
+            self.conv4 = nn.Conv2d(self.numIn, self.numOut, bias=True, kernel_size=1)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
@@ -52,10 +58,11 @@ class Residual(nn.Module):
 
 
 class hg_furukawa_original(nn.Module):
-    def __init__(self, n_classes):
+    def __init__(self, n_heatmap_channels, n_output_channels):
         super(hg_furukawa_original, self).__init__()
-        self.conv1_ = nn.Conv2d(
-            3, 64, bias=True, kernel_size=7, stride=2, padding=3)
+        self.n_heatmap_channels = n_heatmap_channels
+        self.n_output_channels = n_output_channels
+        self.conv1_ = nn.Conv2d(3, 64, bias=True, kernel_size=7, stride=2, padding=3)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu1 = nn.ReLU(inplace=True)
         self.r01 = Residual(64, 128)
@@ -118,15 +125,15 @@ class hg_furukawa_original(nn.Module):
         self.conv3_ = nn.Conv2d(512, 256, bias=True, kernel_size=1)
         self.bn3 = nn.BatchNorm2d(256)
         self.relu3 = nn.ReLU(inplace=True)
-        self.conv4_ = nn.Conv2d(256, n_classes, bias=True, kernel_size=1)
+        self.conv4_ = nn.Conv2d(256, n_output_channels, bias=True, kernel_size=1)
         self.upsample = nn.ConvTranspose2d(
-            n_classes, n_classes, kernel_size=4, stride=4)
+            n_output_channels, n_output_channels, kernel_size=4, stride=4
+        )
         self.sigmoid = nn.Sigmoid()
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
@@ -204,11 +211,13 @@ class hg_furukawa_original(nn.Module):
         out = self.conv4_(out)
         out = self.upsample(out)
         # heatmap channels go trough sigmoid
-        out[:, :21] = self.sigmoid(out[:, :21])
+        out[:, : self.n_heatmap_channels] = self.sigmoid(
+            out[:, : self.n_heatmap_channels]
+        )
         return out
 
     def _upsample_add(self, x, y):
-        '''Upsample and add two feature maps.
+        """Upsample and add two feature maps.
         Args:
           x: (Variable) top feature map to be upsampled.
           y: (Variable) lateral feature map.
@@ -222,10 +231,12 @@ class hg_furukawa_original(nn.Module):
         conv2d feature map size: [N,_,8,8] ->
         upsampled feature map size: [N,_,16,16]
         So we choose bilinear upsample which supports arbitrary output sizes.
-        '''
+        """
         _, _, H, W = y.size()
         if y.shape != x.shape:
-            return F.interpolate(x, size=(H, W), mode='bilinear', align_corners=False) + y
+            return (
+                F.interpolate(x, size=(H, W), mode="bilinear", align_corners=False) + y
+            )
         else:
             return x + y
 
@@ -233,7 +244,7 @@ class hg_furukawa_original(nn.Module):
         # Pre-trained network weights from Human pose estimation via Convolutional Part Heatmap Regression
         # https://www.adrianbulat.com/human-pose-estimation MPII
         model = model_1427.model_1427
-        model.load_state_dict(torch.load('floortrans/models/model_1427.pth'))
+        model.load_state_dict(torch.load("floortrans/models/model_1427.pth"))
 
-        for (src, dst) in zip(model.parameters(), self.parameters()):
+        for src, dst in zip(model.parameters(), self.parameters()):
             dst[:].data.copy_(src[:].data)

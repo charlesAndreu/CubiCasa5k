@@ -107,7 +107,7 @@ def train(args, log_dir, writer, logger):
     # 11: number of icon segmentation logits (multiclass over 11 icon types)
     input_slice = [21, 12, 11]
     if args.arch == "hg_furukawa_original":
-        model = get_model(args.arch, 51)
+        model = get_model(args.arch, n_heatmap_channels=21, n_channels=51)
         criterion = UncertaintyLoss(input_slice=input_slice)
         if args.furukawa_weights:
             logger.info(
@@ -132,7 +132,7 @@ def train(args, log_dir, writer, logger):
             nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             nn.init.constant_(m.bias, 0)
     else:
-        model = get_model(args.arch, args.n_classes)
+        model = get_model(args.arch, n_heatmap_channels=21, n_channels=args.n_classes)
         criterion = UncertaintyLoss(input_slice=input_slice)
 
     model.cuda()
