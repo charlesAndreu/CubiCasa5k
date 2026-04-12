@@ -152,54 +152,78 @@ class SegmentationMapTrainer:
         model.n_output_channels = self.n_output_channels
 
         model.cuda()
-        return model
+        self.model = model
 
-    def draw_tensorboard_graph(self, model):
+    def draw_tensorboard_graph(self):
         # TensorBoard: computation graph (disabled; study later)
         # dummy = torch.zeros((2, 3, self.args.image_size, self.args.image_size)).cuda()
-        # model(dummy)
-        # self.writer.add_graph(model, dummy)
+        # self.model(dummy)
+        # self.writer.add_graph(self.model, dummy)
         pass
 
-    def setup_optimizer(self, model):
+    def setup_optimizer(self):
         if self.args.optimizer == "adam-patience":
-            optimizer = torch.optim.Adam(
-                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.args.l_rate,
+                eps=1e-8,
+                betas=(0.9, 0.999),
             )
-            scheduler = ReduceLROnPlateau(
-                optimizer, "min", patience=self.args.patience, factor=0.5
+            self.scheduler = ReduceLROnPlateau(
+                self.optimizer, "min", patience=self.args.patience, factor=0.5
             )
         elif self.args.optimizer == "adam-patience-previous-best":
-            optimizer = torch.optim.Adam(
-                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.args.l_rate,
+                eps=1e-8,
+                betas=(0.9, 0.999),
             )
-            scheduler = None
+            self.scheduler = None
         elif self.args.optimizer == "sgd":
 
             def lr_drop(epoch):
                 return (1 - epoch / self.args.n_epoch) ** 0.9
 
-            optimizer = torch.optim.SGD(
-                model.parameters(),
+            self.optimizer = torch.optim.SGD(
+                self.model.parameters(),
                 lr=self.args.l_rate,
                 momentum=0.9,
                 weight_decay=10**-4,
                 nesterov=True,
             )
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer, lr_lambda=lr_drop
+            )
         elif self.args.optimizer == "adam-scheduler":
 
             def lr_drop(epoch):
                 return 0.5 ** np.floor(epoch / self.args.l_rate_drop)
 
-            optimizer = torch.optim.Adam(
-                model.parameters(), lr=self.args.l_rate, eps=1e-8, betas=(0.9, 0.999)
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.args.l_rate,
+                eps=1e-8,
+                betas=(0.9, 0.999),
             )
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer, lr_lambda=lr_drop
+            )
         else:
             raise ValueError(f"Invalid optimizer: {self.args.optimizer}")
 
-        return optimizer, scheduler
+    def save_checkpoint(self, filename, epoch, best_loss=None):
+        """Save training checkpoint under log_dir. filename is a basename (e.g. 'model_last_epoch.pkl')."""
+        state = {
+            "epoch": epoch,
+            "model_state": self.model.state_dict(),
+            "criterion_state": self.criterion.state_dict(),
+            "optimizer_state": self.optimizer.state_dict(),
+        }
+        if best_loss is not None:
+            state["best_loss"] = best_loss
+        path = os.path.join(self.log_dir, filename)
+        torch.save(state, path)
 
     def train(self):
 
@@ -207,10 +231,10 @@ class SegmentationMapTrainer:
             json.dump(vars(self.args), out, indent=4)
 
         trainloader, valloader = self.data_loader()
-        model = self.model_setup()
-        self.draw_tensorboard_graph(model)
-        optimizer, scheduler = self.setup_optimizer(model)
-        criterion = nn.CrossEntropyLoss().cuda()
+        self.model_setup()
+        self.draw_tensorboard_graph()
+        self.setup_optimizer()
+        self.criterion = nn.CrossEntropyLoss().cuda()
 
         first_best = True
         best_loss = np.inf
@@ -224,7 +248,7 @@ class SegmentationMapTrainer:
 
         # train for n_epochs
         for epoch in range(start_epoch, self.args.n_epoch):
-            model.train()
+            self.model.train()
             epoch_train_losses = []
             # ------------------------------------------------------------
             # Training
@@ -235,15 +259,15 @@ class SegmentationMapTrainer:
                 images = samples["image"].cuda(non_blocking=True)
                 labels = samples["label"].cuda(non_blocking=True)
                 # outputs are logits: (N, n_output_channels, H, W)
-                outputs = model(images)
+                outputs = self.model(images)
                 # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
                 target = self.prepare_segmentation_target(labels, outputs.shape[2:])
-                loss = criterion(outputs, target)
+                loss = self.criterion(outputs, target)
                 epoch_train_losses.append(loss.item())
 
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()
+                self.optimizer.step()
 
             train_loss = float(np.mean(epoch_train_losses))
 
@@ -252,7 +276,7 @@ class SegmentationMapTrainer:
             )
 
             # TensorBoard: training scalars (disabled; study later)
-            # current_lr = optimizer.param_groups[0]["lr"]
+            # current_lr = self.optimizer.param_groups[0]["lr"]
             # self.writer.add_scalars(
             #     "training",
             #     {"loss": float(train_loss), "lr": float(current_lr)},
@@ -262,7 +286,7 @@ class SegmentationMapTrainer:
             # ------------------------------------------------------------
             # Validation
             # ------------------------------------------------------------
-            model.eval()
+            self.model.eval()
             val_losses = []
             for i_val, samples_val in tqdm(
                 enumerate(valloader), total=len(valloader), ncols=80, leave=False
@@ -271,11 +295,11 @@ class SegmentationMapTrainer:
                     images_val = samples_val["image"].cuda(non_blocking=True)
                     labels_val = samples_val["label"].cuda(non_blocking=True)
 
-                    outputs = model(images_val)
+                    outputs = self.model(images_val)
                     target = self.prepare_segmentation_target(
                         labels_val, outputs.shape[2:]
                     )
-                    loss = criterion(outputs, target)
+                    loss = self.criterion(outputs, target)
                     val_losses.append(loss.item())
 
                     # Per-pixel class predictions: (N, C, H, W) -> argmax over C
@@ -293,7 +317,7 @@ class SegmentationMapTrainer:
             # Learning rate scheduler
             # adam-patience: reduce learning rate when validation loss plateaus
             if self.args.optimizer == "adam-patience":
-                scheduler.step(val_loss_mean)
+                self.scheduler.step(val_loss_mean)
             # adam-patience-previous-best: reduce learning rate when validation loss plateaus and save the best model
             elif self.args.optimizer == "adam-patience-previous-best":
                 if best_val_loss_variance > val_loss_mean:
@@ -310,15 +334,15 @@ class SegmentationMapTrainer:
                     checkpoint = torch.load(
                         self.log_dir + "/model_best_val_loss_var.pkl"
                     )
-                    model.load_state_dict(checkpoint["model_state"])
-                    for i, p in enumerate(optimizer.param_groups):
-                        optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
+                    self.model.load_state_dict(checkpoint["model_state"])
+                    for i, p in enumerate(self.optimizer.param_groups):
+                        self.optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
                     no_improvement = 0
 
             # sgd: reduce learning rate when validation loss plateaus
             # adam-scheduler: reduce learning rate when validation loss plateaus
             elif self.args.optimizer in ["sgd", "adam-scheduler"]:
-                scheduler.step(epoch + 1)
+                self.scheduler.step(epoch + 1)
 
             score, class_iou = running_metrics_map_val.get_scores()
             # TensorBoard: validation metrics (disabled; study later)
@@ -340,14 +364,11 @@ class SegmentationMapTrainer:
             if val_loss_mean < best_loss_var:
                 best_loss_var = val_loss_mean
                 self.logger.info("Best validation loss found saving model...")
-                state = {
-                    "epoch": epoch + 1,
-                    "model_state": model.state_dict(),
-                    "criterion_state": criterion.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "best_loss": best_loss,
-                }
-                torch.save(state, self.log_dir + "/model_best_val_loss_var.pkl")
+                self.save_checkpoint(
+                    "model_best_val_loss_var.pkl",
+                    epoch + 1,
+                    best_loss=best_loss,
+                )
                 # TensorBoard: plot_samples (matplotlib + add_image/add_figure) — disabled; study later
                 # if self.args.plot_samples:
                 #     import matplotlib.pyplot as plt
@@ -375,7 +396,7 @@ class SegmentationMapTrainer:
                 #                         "Image " + str(i) + " label/Channel " + str(j),
                 #                         fig,
                 #                     )
-                #             outputs = model(images_val)
+                #             outputs = self.model(images_val)
                 #             pred_map = outputs[0].argmax(dim=0).detach().cpu().numpy()
                 #             fig = plt.figure(figsize=(18, 12))
                 #             plot = fig.add_subplot(111)
@@ -397,46 +418,31 @@ class SegmentationMapTrainer:
             if val_loss_mean < best_loss:
                 best_loss = val_loss_mean
                 self.logger.info("Best validation loss found saving model...")
-                state = {
-                    "epoch": epoch + 1,
-                    "model_state": model.state_dict(),
-                    "criterion_state": criterion.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "best_loss": best_loss,
-                }
-                torch.save(state, self.log_dir + "/model_best_val_loss.pkl")
+                self.save_checkpoint(
+                    "model_best_val_loss.pkl",
+                    epoch + 1,
+                    best_loss=best_loss,
+                )
 
             px_acc = score["Mean Acc"]
             if px_acc > best_acc:
                 best_acc = px_acc
                 self.logger.info("Best validation pixel accuracy found saving model...")
-                state = {
-                    "epoch": epoch + 1,
-                    "model_state": model.state_dict(),
-                    "criterion_state": criterion.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                }
-                torch.save(state, self.log_dir + "/model_best_val_acc.pkl")
+                self.save_checkpoint(
+                    "model_best_val_acc.pkl",
+                    epoch + 1,
+                )
 
             if train_loss < best_train_loss:
                 best_train_loss = train_loss
                 self.logger.info("Best training loss with variance...")
-                state = {
-                    "epoch": epoch + 1,
-                    "model_state": model.state_dict(),
-                    "criterion_state": criterion.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                }
-                torch.save(state, self.log_dir + "/model_best_train_loss_var.pkl")
+                self.save_checkpoint(
+                    "model_best_train_loss_var.pkl",
+                    epoch + 1,
+                )
 
         self.logger.info("Last epoch done saving final model...")
-        state = {
-            "epoch": epoch + 1,
-            "model_state": model.state_dict(),
-            "criterion_state": criterion.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-        }
-        torch.save(state, self.log_dir + "/model_last_epoch.pkl")
+        self.save_checkpoint("model_last_epoch.pkl", epoch + 1)
 
 
 if __name__ == "__main__":
@@ -448,13 +454,6 @@ if __name__ == "__main__":
         required=True,
         choices=["room", "icon"],
         help="The segmentation map to train on. Must be 'room' or 'icon'.",
-    )
-    parser.add_argument(
-        "--arch",
-        nargs="?",
-        type=str,
-        default="hg_furukawa_original",
-        help="Architecture to use.",
     )
     parser.add_argument(
         "--optimizer",
@@ -483,13 +482,6 @@ if __name__ == "__main__":
         "--l-rate", nargs="?", type=float, default=1e-3, help="Learning Rate"
     )
     parser.add_argument(
-        "--l-rate-var",
-        nargs="?",
-        type=float,
-        default=1e-3,
-        help="Learning Rate for Variance",
-    )
-    parser.add_argument(
         "--l-rate-drop",
         nargs="?",
         type=float,
@@ -504,33 +496,11 @@ if __name__ == "__main__":
         help="Learning rate drop patience",
     )
     parser.add_argument(
-        "--feature-scale",
-        nargs="?",
-        type=int,
-        default=1,
-        help="Divider for # of features to use",
-    )
-    parser.add_argument(
-        "--weights",
-        nargs="?",
-        type=str,
-        default=None,
-        help="Path to previously trained model weights file .pkl",
-    )
-    parser.add_argument(
         "--furukawa-weights",
         nargs="?",
         type=str,
         default=None,
         help="Path to previously trained furukawa model weights file .pkl",
-    )
-    parser.add_argument(
-        "--new-hyperparams",
-        nargs="?",
-        type=bool,
-        default=False,
-        const=True,
-        help="Continue training with new hyperparameters",
     )
     parser.add_argument(
         "--log-path",
@@ -545,7 +515,7 @@ if __name__ == "__main__":
         type=bool,
         default=False,
         const=True,
-        help="Continue training with new hyperparameters",
+        help="Use DataLoader with num_workers=0 for easier debugging.",
     )
     parser.add_argument(
         "--plot-samples",
