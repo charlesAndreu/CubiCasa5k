@@ -6,6 +6,7 @@ import os
 import logging
 import json
 import argparse
+import lmdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,12 +27,15 @@ from tqdm import tqdm
 from floortrans.loaders import FloorplanSVG
 from floortrans.models import hg_furukawa_original
 from floortrans.metrics import runningScore
+
 # from tensorboardX import SummaryWriter  # TensorBoard (disabled; study later)
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 # import matplotlib.pyplot as plt  # only used for TensorBoard plot_samples below
 
 
 class SegmentationMapTrainer:
+
     def __init__(self, args, log_dir, writer, logger):
         self.segmentation_map = args.segmentation_map
         self.args = args
@@ -39,6 +43,7 @@ class SegmentationMapTrainer:
         self.writer = writer  # None when TensorBoard is disabled
         self.logger = logger
         self.n_output_channels = 12 if self.segmentation_map == "room" else 11
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def prepare_segmentation_target(self, labels, output_hw):
         """
@@ -93,11 +98,29 @@ class SegmentationMapTrainer:
         # Setup Dataloader
         # self.writer.add_text("parameters", str(vars(self.args)))  # TensorBoard
         self.logger.info("Loading data...")
+        root = self.args.data_path.rstrip(os.sep)
+        lmdb_path = os.path.join(root, "cubi_lmdb")
+        lmdb_env = lmdb.open(
+            lmdb_path,
+            readonly=True,
+            max_readers=16,
+            lock=False,
+            readahead=True,
+            meminit=False,
+        )
         train_set = FloorplanSVG(
-            self.args.data_path, "train.txt", format="lmdb", augmentations=aug
+            self.args.data_path,
+            "train.txt",
+            format="lmdb",
+            augmentations=aug,
+            lmdb_env=lmdb_env,
         )
         val_set = FloorplanSVG(
-            self.args.data_path, "val.txt", format="lmdb", augmentations=DictToTensor()
+            self.args.data_path,
+            "val.txt",
+            format="lmdb",
+            augmentations=DictToTensor(),
+            lmdb_env=lmdb_env,
         )
 
         if self.args.debug:
@@ -112,10 +135,13 @@ class SegmentationMapTrainer:
             batch_size=self.args.batch_size,
             num_workers=num_workers,
             shuffle=True,
-            pin_memory=True,
+            pin_memory=(self.device == "cuda"),
         )
         valloader = data.DataLoader(
-            val_set, batch_size=1, num_workers=num_workers, pin_memory=True
+            val_set,
+            batch_size=1,
+            num_workers=num_workers,
+            pin_memory=(self.device == "cuda"),
         )
         return trainloader, valloader
 
@@ -127,7 +153,7 @@ class SegmentationMapTrainer:
 
         # load the original model with its 51 channels to be able to load the weights from the pre-trained model
         # however, we set n_heatmap_channels to 0 to avoid any sigmoid operation applied in conv4_ to these channels
-        model = hg_furukawa_original(n_heatmap_channels=0, n_channels=51)
+        model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
         model.init_weights()
         if self.args.furukawa_weights:
             self.logger.info(
@@ -151,8 +177,7 @@ class SegmentationMapTrainer:
 
         model.n_output_channels = self.n_output_channels
 
-        model.cuda()
-        self.model = model
+        self.model = model.to(self.device)
 
     def draw_tensorboard_graph(self):
         # TensorBoard: computation graph (disabled; study later)
@@ -230,11 +255,12 @@ class SegmentationMapTrainer:
         with open(self.log_dir + "/args.json", "w") as out:
             json.dump(vars(self.args), out, indent=4)
 
+        self.logger.info("Using device: %s", self.device)
         trainloader, valloader = self.data_loader()
         self.model_setup()
         self.draw_tensorboard_graph()
         self.setup_optimizer()
-        self.criterion = nn.CrossEntropyLoss().cuda()
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
 
         first_best = True
         best_loss = np.inf
@@ -254,10 +280,18 @@ class SegmentationMapTrainer:
             # Training
             # ------------------------------------------------------------
             for i, samples in tqdm(
-                enumerate(trainloader), total=len(trainloader), ncols=80, leave=False
+                enumerate(trainloader),
+                total=len(trainloader),
+                ncols=80,
+                leave=False,
+                desc=f"Train ep {epoch + 1}/{self.args.n_epoch}",
             ):
-                images = samples["image"].cuda(non_blocking=True)
-                labels = samples["label"].cuda(non_blocking=True)
+                images = samples["image"].to(
+                    self.device, non_blocking=(self.device == "cuda")
+                )
+                labels = samples["label"].to(
+                    self.device, non_blocking=(self.device == "cuda")
+                )
                 # outputs are logits: (N, n_output_channels, H, W)
                 outputs = self.model(images)
                 # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
@@ -289,11 +323,19 @@ class SegmentationMapTrainer:
             self.model.eval()
             val_losses = []
             for i_val, samples_val in tqdm(
-                enumerate(valloader), total=len(valloader), ncols=80, leave=False
+                enumerate(valloader),
+                total=len(valloader),
+                ncols=80,
+                leave=False,
+                desc=f"Val   ep {epoch + 1}/{self.args.n_epoch}",
             ):
                 with torch.no_grad():
-                    images_val = samples_val["image"].cuda(non_blocking=True)
-                    labels_val = samples_val["label"].cuda(non_blocking=True)
+                    images_val = samples_val["image"].to(
+                        self.device, non_blocking=(self.device == "cuda")
+                    )
+                    labels_val = samples_val["label"].to(
+                        self.device, non_blocking=(self.device == "cuda")
+                    )
 
                     outputs = self.model(images_val)
                     target = self.prepare_segmentation_target(
@@ -363,7 +405,9 @@ class SegmentationMapTrainer:
 
             if val_loss_mean < best_loss_var:
                 best_loss_var = val_loss_mean
-                self.logger.info("Best validation loss found saving model...")
+                self.logger.info(
+                    "New best val loss (var track), saving model_best_val_loss_var.pkl..."
+                )
                 self.save_checkpoint(
                     "model_best_val_loss_var.pkl",
                     epoch + 1,
@@ -417,7 +461,9 @@ class SegmentationMapTrainer:
 
             if val_loss_mean < best_loss:
                 best_loss = val_loss_mean
-                self.logger.info("Best validation loss found saving model...")
+                self.logger.info(
+                    "New best val loss (main track), saving model_best_val_loss.pkl..."
+                )
                 self.save_checkpoint(
                     "model_best_val_loss.pkl",
                     epoch + 1,
@@ -536,6 +582,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     log_dir = args.log_path + "/" + time_stamp + "/"
+    os.makedirs(log_dir, exist_ok=True)
     # writer = SummaryWriter(log_dir)  # TensorBoard (disabled; study later)
     writer = None
     logger = logging.getLogger("train")

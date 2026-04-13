@@ -19,6 +19,7 @@ class FloorplanSVG(Dataset):
         format="txt",
         original_size=False,
         lmdb_folder="cubi_lmdb/",
+        lmdb_env=None,
     ):
         self.img_norm = img_norm
         self.is_transform = is_transform
@@ -32,14 +33,17 @@ class FloorplanSVG(Dataset):
         if format == "txt":
             self.get_data = self.get_txt
         if format == "lmdb":
-            self.lmdb = lmdb.open(
-                data_folder + lmdb_folder,
-                readonly=True,
-                max_readers=8,
-                lock=False,
-                readahead=True,
-                meminit=False,
-            )
+            if lmdb_env is not None:
+                self.lmdb = lmdb_env
+            else:
+                self.lmdb = lmdb.open(
+                    data_folder + lmdb_folder,
+                    readonly=True,
+                    max_readers=8,
+                    lock=False,
+                    readahead=True,
+                    meminit=False,
+                )
             self.get_data = self.get_lmdb
 
         self.data_folder = data_folder

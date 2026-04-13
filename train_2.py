@@ -6,6 +6,7 @@ import os
 import logging
 import json
 import argparse
+import lmdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -75,11 +76,29 @@ def train(args, log_dir, writer, logger):
     # Setup Dataloader
     writer.add_text("parameters", str(vars(args)))
     logging.info("Loading data...")
+    root = args.data_path.rstrip(os.sep)
+    lmdb_path = os.path.join(root, "cubi_lmdb")
+    lmdb_env = lmdb.open(
+        lmdb_path,
+        readonly=True,
+        max_readers=16,
+        lock=False,
+        readahead=True,
+        meminit=False,
+    )
     train_set = FloorplanSVG(
-        args.data_path, "train.txt", format="lmdb", augmentations=aug
+        args.data_path,
+        "train.txt",
+        format="lmdb",
+        augmentations=aug,
+        lmdb_env=lmdb_env,
     )
     val_set = FloorplanSVG(
-        args.data_path, "val.txt", format="lmdb", augmentations=DictToTensor()
+        args.data_path,
+        "val.txt",
+        format="lmdb",
+        augmentations=DictToTensor(),
+        lmdb_env=lmdb_env,
     )
 
     if args.debug:

@@ -1,4 +1,4 @@
-# environnement virtuel python
+# Python virtual environment
 
 ```bash
 python3.11 -m venv .venv
@@ -8,19 +8,35 @@ python -m pip install -r requirements.txt
 ```
 
 
-# création de la base de données lmdb
+# Creating the LMDB database
 ```bash
 python create_lmdb.py --txt train.txt
 python create_lmdb.py --txt val.txt
 python create_lmdb.py --txt test.txt
 ```
-for more little datasets, you can use `sample_data.txt` file.git 
+For smaller subsets you can use the `sample_data.txt` file.
 
-# visualisation de la base de données lmdb
+**Debug datasets** (separate LMDB at `data/cubicasa5k/debug/cubi_lmdb/`, run from the repo root):
+
+```bash
+python create_lmdb.py --txt debug/train.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/ --overwrite
+python create_lmdb.py --txt debug/val.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/
+python create_lmdb.py --txt debug/test.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/
+```
+
+**Simple debug training** on the debug dataset:
+
+```bash
+python train_simple.py --debug --segmentation-map room --data-path data/cubicasa5k/debug/ --image-size 128 --n-epoch 3 --batch-size 3
+```
+
+
+
+# Visualizing the LMDB database
 ```bash
 python lmdb_viewer.py
 ```
-puis dans le navigateur web: http://localhost:8080/
+Then open in the browser: http://localhost:8080/
 
 # training
 ## single task training
