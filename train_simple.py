@@ -263,8 +263,7 @@ class SegmentationMapTrainer:
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
         first_best = True
-        best_loss = np.inf
-        best_loss_var = np.inf
+        best_val_loss = np.inf
         best_train_loss = np.inf
         best_acc = 0
         start_epoch = 0
@@ -373,9 +372,7 @@ class SegmentationMapTrainer:
                         + str(no_improvement)
                         + " loading last best model and reducing learning rate."
                     )
-                    checkpoint = torch.load(
-                        self.log_dir + "/model_best_val_loss_var.pkl"
-                    )
+                    checkpoint = torch.load(self.log_dir + "/model_best_val_loss.pkl")
                     self.model.load_state_dict(checkpoint["model_state"])
                     for i, p in enumerate(self.optimizer.param_groups):
                         self.optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
@@ -403,15 +400,13 @@ class SegmentationMapTrainer:
             # )
             running_metrics_map_val.reset()
 
-            if val_loss_mean < best_loss_var:
-                best_loss_var = val_loss_mean
-                self.logger.info(
-                    "New best val loss (var track), saving model_best_val_loss_var.pkl..."
-                )
+            if val_loss_mean < best_val_loss:
+                best_val_loss = val_loss_mean
+                self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
                 self.save_checkpoint(
-                    "model_best_val_loss_var.pkl",
+                    "model_best_val_loss.pkl",
                     epoch + 1,
-                    best_loss=best_loss,
+                    best_loss=best_val_loss,
                 )
                 # TensorBoard: plot_samples (matplotlib + add_image/add_figure) — disabled; study later
                 # if self.args.plot_samples:
@@ -458,17 +453,6 @@ class SegmentationMapTrainer:
                 #             )
 
                 first_best = False
-
-            if val_loss_mean < best_loss:
-                best_loss = val_loss_mean
-                self.logger.info(
-                    "New best val loss (main track), saving model_best_val_loss.pkl..."
-                )
-                self.save_checkpoint(
-                    "model_best_val_loss.pkl",
-                    epoch + 1,
-                    best_loss=best_loss,
-                )
 
             px_acc = score["Mean Acc"]
             if px_acc > best_acc:
