@@ -15,5 +15,6 @@ svgpathtools
 
 matplotlib
 tensorboardX
+tensorboard
 
 flask

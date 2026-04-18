@@ -232,13 +232,12 @@ class hg_furukawa_original(nn.Module):
         upsampled feature map size: [N,_,16,16]
         So we choose bilinear upsample which supports arbitrary output sizes.
         """
+        # Always interpolate x to y's (H, W). If sizes already match, this is a no-op
+        # and avoids `if y.shape != x.shape`, which breaks torch.jit tracing (TensorBoard add_graph)
+        # with TracerWarning: tensor→Python bool in the graph recorder.
         _, _, H, W = y.size()
-        if y.shape != x.shape:
-            return (
-                F.interpolate(x, size=(H, W), mode="bilinear", align_corners=False) + y
-            )
-        else:
-            return x + y
+        x_up = F.interpolate(x, size=(H, W), mode="bilinear", align_corners=False)
+        return x_up + y
 
     def init_weights(self):
         # Pre-trained network weights from Human pose estimation via Convolutional Part Heatmap Regression

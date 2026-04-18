@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import matplotlib
 
 matplotlib.use("pdf")
@@ -6,6 +7,7 @@ import os
 import logging
 import json
 import argparse
+import math
 import lmdb
 import torch
 import torch.nn as nn
@@ -28,10 +30,8 @@ from floortrans.loaders import FloorplanSVG
 from floortrans.models import hg_furukawa_original
 from floortrans.metrics import runningScore
 
-# from tensorboardX import SummaryWriter  # TensorBoard (disabled; study later)
+from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-# import matplotlib.pyplot as plt  # only used for TensorBoard plot_samples below
 
 
 class SegmentationMapTrainer:
@@ -96,7 +96,6 @@ class SegmentationMapTrainer:
             )
 
         # Setup Dataloader
-        # self.writer.add_text("parameters", str(vars(self.args)))  # TensorBoard
         self.logger.info("Loading data...")
         root = self.args.data_path.rstrip(os.sep)
         lmdb_path = os.path.join(root, "cubi_lmdb")
@@ -154,15 +153,21 @@ class SegmentationMapTrainer:
         # load the original model with its 51 channels to be able to load the weights from the pre-trained model
         # however, we set n_heatmap_channels to 0 to avoid any sigmoid operation applied in conv4_ to these channels
         model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
-        model.init_weights()
-        if self.args.furukawa_weights:
-            self.logger.info(
-                "Loading furukawa model weights from checkpoint '{}'".format(
-                    self.args.furukawa_weights
+        resume = bool(self.args.resume_from)
+        if not resume:
+            model.init_weights()
+            if self.args.furukawa_weights:
+                self.logger.info(
+                    "Loading furukawa model weights from checkpoint '{}'".format(
+                        self.args.furukawa_weights
+                    )
                 )
+                checkpoint = torch.load(self.args.furukawa_weights)
+                model.load_state_dict(checkpoint["model_state"])
+        else:
+            self.logger.info(
+                "Skipping init_weights / --furukawa-weights; will load full state from --resume-from"
             )
-            checkpoint = torch.load(self.args.furukawa_weights)
-            model.load_state_dict(checkpoint["model_state"])
         # replace the last conv layer with a 1x1 conv layer to output the desired number of channels
         model.conv4_ = torch.nn.Conv2d(
             256, self.n_output_channels, bias=True, kernel_size=1
@@ -170,21 +175,120 @@ class SegmentationMapTrainer:
         model.upsample = torch.nn.ConvTranspose2d(
             self.n_output_channels, self.n_output_channels, kernel_size=4, stride=4
         )
-        # initialize the weights of the last conv layer and the upsample layer that have been re-configured
-        for m in [model.conv4_, model.upsample]:
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            nn.init.constant_(m.bias, 0)
+        if not resume:
+            for m in [model.conv4_, model.upsample]:
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.constant_(m.bias, 0)
 
         model.n_output_channels = self.n_output_channels
 
         self.model = model.to(self.device)
 
+        if resume:
+            self.logger.info(
+                "Resuming model weights from checkpoint '%s'", self.args.resume_from
+            )
+            checkpoint = torch.load(self.args.resume_from, map_location=self.device)
+            self.model.load_state_dict(checkpoint["model_state"])
+
     def draw_tensorboard_graph(self):
-        # TensorBoard: computation graph (disabled; study later)
-        # dummy = torch.zeros((2, 3, self.args.image_size, self.args.image_size)).cuda()
-        # self.model(dummy)
-        # self.writer.add_graph(self.model, dummy)
-        pass
+        if self.writer is None:
+            return
+        dummy = torch.zeros(
+            (2, 3, self.args.image_size, self.args.image_size),
+            device=self.device,
+        )
+        self.writer.add_graph(self.model, dummy)
+
+    def tensorboard_log_args(self):
+        if self.writer is None:
+            return
+        self.writer.add_text("parameters", str(vars(self.args)))
+
+    @staticmethod
+    def _tb_finite_float(x):
+        """Plain float for TensorBoard; None if NaN/Inf (metrics often NaN per-class on small val sets)."""
+        v = float(np.asarray(x).reshape(-1)[0])
+        if not math.isfinite(v):
+            return None
+        return v
+
+    def _log_tb_scalar(self, tag, value, step):
+        if self.writer is None:
+            return
+        v = self._tb_finite_float(value)
+        if v is not None:
+            self.writer.add_scalar(tag, v, global_step=step)
+
+    def tensorboard_log_training_scalars(self, epoch, train_loss):
+        if self.writer is None:
+            return
+        step = 1 + epoch
+        lr = self.optimizer.param_groups[0]["lr"]
+        self._log_tb_scalar("training/loss", train_loss, step)
+        self._log_tb_scalar("training/lr", lr, step)
+
+    def tensorboard_log_validation_loss(self, epoch, val_loss_mean):
+        self._log_tb_scalar("validation/loss", val_loss_mean, 1 + epoch)
+
+    def tensorboard_log_validation_map_metrics(self, epoch, score, class_iou):
+        if self.writer is None:
+            return
+        step = 1 + epoch
+        for name, val in score.items():
+            tag = "validation/map/general/" + name.replace(" ", "_")
+            self._log_tb_scalar(tag, val, step)
+        for cls, val in class_iou["Class IoU"].items():
+            self._log_tb_scalar("validation/map/class_iou/" + str(cls), val, step)
+        for cls, val in class_iou["Class Acc"].items():
+            self._log_tb_scalar("validation/map/class_acc/" + str(cls), val, step)
+        self.writer.flush()
+
+    def tensorboard_log_new_best_val_visualizations(self, epoch, valloader, first_best):
+        if self.writer is None or not self.args.plot_samples:
+            return
+
+        self.model.eval()
+        for i, samples_val in enumerate(valloader):
+            with torch.no_grad():
+                if i == 4:
+                    break
+                images_val = samples_val["image"].to(
+                    self.device, non_blocking=(self.device == "cuda")
+                )
+                labels_val = samples_val["label"].to(
+                    self.device, non_blocking=(self.device == "cuda")
+                )
+                if first_best:
+                    self.writer.add_image("Image " + str(i), images_val[0])
+                    for j, l in enumerate(labels_val.squeeze().detach().cpu().numpy()):
+                        fig = plt.figure(figsize=(18, 12))
+                        plot = fig.add_subplot(111)
+                        if j < 21:
+                            cax = plot.imshow(l, vmin=0, vmax=1)
+                        else:
+                            cax = plot.imshow(l, vmin=0, vmax=19, cmap=plt.cm.tab20)
+                        fig.colorbar(cax)
+                        self.writer.add_figure(
+                            "Image " + str(i) + " label/Channel " + str(j),
+                            fig,
+                        )
+                outputs = self.model(images_val)
+                pred_map = outputs[0].argmax(dim=0).detach().cpu().numpy()
+                fig = plt.figure(figsize=(18, 12))
+                plot = fig.add_subplot(111)
+                cax = plot.imshow(
+                    pred_map,
+                    vmin=0,
+                    vmax=self.n_output_channels - 1,
+                    cmap=plt.cm.tab20,
+                )
+                fig.colorbar(cax)
+                self.writer.add_figure(
+                    "Image " + str(i) + " prediction/" + self.segmentation_map,
+                    fig,
+                    global_step=1 + epoch,
+                )
 
     def setup_optimizer(self):
         if self.args.optimizer == "adam-patience":
@@ -255,6 +359,7 @@ class SegmentationMapTrainer:
         with open(self.log_dir + "/args.json", "w") as out:
             json.dump(vars(self.args), out, indent=4)
 
+        self.tensorboard_log_args()
         self.logger.info("Using device: %s", self.device)
         trainloader, valloader = self.data_loader()
         self.model_setup()
@@ -308,13 +413,7 @@ class SegmentationMapTrainer:
                 "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
-            # TensorBoard: training scalars (disabled; study later)
-            # current_lr = self.optimizer.param_groups[0]["lr"]
-            # self.writer.add_scalars(
-            #     "training",
-            #     {"loss": float(train_loss), "lr": float(current_lr)},
-            #     global_step=1 + epoch,
-            # )
+            self.tensorboard_log_training_scalars(epoch, train_loss)
 
             # ------------------------------------------------------------
             # Validation
@@ -350,10 +449,7 @@ class SegmentationMapTrainer:
 
             val_loss_mean = float(np.mean(val_losses))
             self.logger.info("val_loss: %.4f" % val_loss_mean)
-            # TensorBoard (disabled; study later)
-            # self.writer.add_scalar(
-            #     "validation/loss", val_loss_mean, global_step=1 + epoch
-            # )
+            self.tensorboard_log_validation_loss(epoch, val_loss_mean)
 
             # Learning rate scheduler
             # adam-patience: reduce learning rate when validation loss plateaus
@@ -384,20 +480,7 @@ class SegmentationMapTrainer:
                 self.scheduler.step(epoch + 1)
 
             score, class_iou = running_metrics_map_val.get_scores()
-            # TensorBoard: validation metrics (disabled; study later)
-            # self.writer.add_scalars(
-            #     "validation/map/general", score, global_step=1 + epoch
-            # )
-            # self.writer.add_scalars(
-            #     "validation/map/IoU",
-            #     class_iou["Class IoU"],
-            #     global_step=1 + epoch,
-            # )
-            # self.writer.add_scalars(
-            #     "validation/map/Acc",
-            #     class_iou["Class Acc"],
-            #     global_step=1 + epoch,
-            # )
+            self.tensorboard_log_validation_map_metrics(epoch, score, class_iou)
             running_metrics_map_val.reset()
 
             if val_loss_mean < best_val_loss:
@@ -408,49 +491,9 @@ class SegmentationMapTrainer:
                     epoch + 1,
                     best_loss=best_val_loss,
                 )
-                # TensorBoard: plot_samples (matplotlib + add_image/add_figure) — disabled; study later
-                # if self.args.plot_samples:
-                #     import matplotlib.pyplot as plt
-                #     for i, samples_val in enumerate(valloader):
-                #         with torch.no_grad():
-                #             if i == 4:
-                #                 break
-                #             images_val = samples_val["image"].cuda(non_blocking=True)
-                #             labels_val = samples_val["label"].cuda(non_blocking=True)
-                #             if first_best:
-                #                 self.writer.add_image("Image " + str(i), images_val[0])
-                #                 for j, l in enumerate(
-                #                     labels_val.squeeze().detach().cpu().numpy()
-                #                 ):
-                #                     fig = plt.figure(figsize=(18, 12))
-                #                     plot = fig.add_subplot(111)
-                #                     if j < 21:
-                #                         cax = plot.imshow(l, vmin=0, vmax=1)
-                #                     else:
-                #                         cax = plot.imshow(
-                #                             l, vmin=0, vmax=19, cmap=plt.cm.tab20
-                #                         )
-                #                     fig.colorbar(cax)
-                #                     self.writer.add_figure(
-                #                         "Image " + str(i) + " label/Channel " + str(j),
-                #                         fig,
-                #                     )
-                #             outputs = self.model(images_val)
-                #             pred_map = outputs[0].argmax(dim=0).detach().cpu().numpy()
-                #             fig = plt.figure(figsize=(18, 12))
-                #             plot = fig.add_subplot(111)
-                #             cax = plot.imshow(
-                #                 pred_map,
-                #                 vmin=0,
-                #                 vmax=self.n_output_channels - 1,
-                #                 cmap=plt.cm.tab20,
-                #             )
-                #             fig.colorbar(cax)
-                #             self.writer.add_figure(
-                #                 "Image " + str(i) + " prediction/" + self.segmentation_map,
-                #                 fig,
-                #                 global_step=1 + epoch,
-                #             )
+                self.tensorboard_log_new_best_val_visualizations(
+                    epoch, valloader, first_best
+                )
 
                 first_best = False
 
@@ -473,6 +516,8 @@ class SegmentationMapTrainer:
 
         self.logger.info("Last epoch done saving final model...")
         self.save_checkpoint("model_last_epoch.pkl", epoch + 1)
+        if self.writer is not None:
+            self.writer.close()
 
 
 if __name__ == "__main__":
@@ -533,6 +578,17 @@ if __name__ == "__main__":
         help="Path to previously trained furukawa model weights file .pkl",
     )
     parser.add_argument(
+        "--resume-from",
+        nargs="?",
+        type=str,
+        default=None,
+        help=(
+            "Path to a train_simple checkpoint .pkl (e.g. model_best_val_loss.pkl) "
+            "with the segmentation head; loaded after the model is built. "
+            "Do not use for raw 51-ch Furukawa weights (use --furukawa-weights)."
+        ),
+    )
+    parser.add_argument(
         "--log-path",
         nargs="?",
         type=str,
@@ -567,8 +623,7 @@ if __name__ == "__main__":
 
     log_dir = args.log_path + "/" + time_stamp + "/"
     os.makedirs(log_dir, exist_ok=True)
-    # writer = SummaryWriter(log_dir)  # TensorBoard (disabled; study later)
-    writer = None
+    writer = SummaryWriter(log_dir)
     logger = logging.getLogger("train")
     logger.setLevel(logging.DEBUG)
     fh = logging.FileHandler(log_dir + "/train.log")
