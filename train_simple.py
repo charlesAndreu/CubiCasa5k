@@ -142,7 +142,77 @@ class SegmentationMapTrainer:
             num_workers=num_workers,
             pin_memory=(self.device == "cuda"),
         )
-        return trainloader, valloader
+        return trainloader, valloader, lmdb_env
+
+    def compute_train_segmentation_class_frequencies(self, lmdb_env):
+        """
+        Per-class pixel frequency (0..1, sums to 1) on the training split.
+        Same LMDB + DictToTensor as training labels; room = channel 21, icon = 22.
+        """
+        freq_set = FloorplanSVG(
+            self.args.data_path,
+            "train.txt",
+            format="lmdb",
+            augmentations=DictToTensor(),
+            lmdb_env=lmdb_env,
+            is_transform=False,
+        )
+        nw = 0 if self.args.debug else 8
+        loader = data.DataLoader(
+            freq_set,
+            batch_size=8,
+            shuffle=False,
+            num_workers=nw,
+            pin_memory=False,
+        )
+        ch = 21 if self.segmentation_map == "room" else 22
+        n_cls = self.n_output_channels
+        counts = np.zeros(n_cls, dtype=np.uint64)
+        for samples in tqdm(
+            loader,
+            total=len(loader),
+            ncols=80,
+            desc="Train class freq",
+        ):
+            labels = samples["label"][:, ch, :, :].long().numpy().ravel()
+            labels = np.clip(labels, 0, n_cls - 1)
+            counts += np.bincount(labels, minlength=n_cls).astype(np.uint64)
+        total = float(np.sum(counts))
+        if total <= 0:
+            return np.zeros(n_cls, dtype=np.float64)
+        return counts.astype(np.float64) / total
+
+    def tensorboard_log_train_class_frequency(self, freq, global_step=0):
+        """Log train-set per-class pixel frequency as a vertical bar chart in TensorBoard."""
+        if self.writer is None:
+            return
+        total = float(np.sum(freq))
+        if total <= 0 or not np.isfinite(freq).all():
+            self.logger.warning(
+                "Train class frequency: empty or invalid; skipping TensorBoard log."
+            )
+            return
+
+        n_cls = self.n_output_channels
+        w = max(8.0, n_cls * 0.55)
+        fig = plt.figure(figsize=(w, 4))
+        ax = fig.add_subplot(111)
+        x = np.arange(n_cls)
+        ax.bar(x, freq, width=0.75, color="steelblue", edgecolor="black", linewidth=0.3)
+        ax.set_xlabel("class id")
+        ax.set_ylabel("frequency (fraction of pixels)")
+        ax.set_title(
+            f"Training set class frequency ({self.segmentation_map})"
+        )
+        ax.set_xticks(x)
+        fig.tight_layout()
+        self.writer.add_figure(
+            f"dataset/train_{self.segmentation_map}_class_frequency",
+            fig,
+            global_step,
+        )
+        plt.close(fig)
+        self.writer.flush()
 
     def model_setup(self):
         self.logger.info("Loading model...")
@@ -361,7 +431,14 @@ class SegmentationMapTrainer:
 
         self.tensorboard_log_args()
         self.logger.info("Using device: %s", self.device)
-        trainloader, valloader = self.data_loader()
+        trainloader, valloader, lmdb_env = self.data_loader()
+        train_class_freq = self.compute_train_segmentation_class_frequencies(lmdb_env)
+        self.logger.info(
+            "Train %s class frequency (per class id): %s",
+            self.segmentation_map,
+            train_class_freq.tolist(),
+        )
+        self.tensorboard_log_train_class_frequency(train_class_freq, global_step=0)
         self.model_setup()
         self.draw_tensorboard_graph()
         self.setup_optimizer()
