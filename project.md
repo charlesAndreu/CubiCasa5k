@@ -23,6 +23,32 @@ python create_lmdb.py --txt test.txt
 ```
 For smaller subsets you can use the `sample_data.txt` file.
 
+multiplewarnings while creating the LMDB database:
+```bash
+libpng warning: iCCP: profile 'ICC Profile': 'CMYK': invalid ICC profile color space
+# and in validation set:
+libpng warning: iCCP: profile 'ICC Profile': 'tech': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'rTRC': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'gTRC': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'bTRC': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'desc': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'wtpt': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'bkpt': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'rXYZ': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'gXYZ': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'bXYZ': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'dmnd': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'dmdd': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'vued': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'view': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'lumi': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'meas': ICC profile tag start not a multiple of 4
+libpng warning: iCCP: profile 'ICC Profile': 'tech': ICC profile tag start not a multiple of 4
+```
+i fixed issue in data loader when creating the LMDB database by using uint16 instead of uint8 : wall_id increments for each Wall/Railing in the SVG; it reached 256, which doesn't fit in np.uint8 (0-255). Changing wall_ids to np.uint16.
+
+database size: 26G
+
 **Debug datasets** (separate LMDB at `data/cubicasa5k/debug/cubi_lmdb/`, run from the repo root):
 
 ```bash
@@ -33,6 +59,7 @@ python create_lmdb.py --txt debug/test.txt --data-path data/cubicasa5k/ --lmdb d
 
 **Simple debug training** on the debug dataset:
 
+seems that we should use --image-size 256 for representative runs : this is the default.
 ```bash
 python train_simple.py --debug --segmentation-map room --data-path data/cubicasa5k/debug/ --image-size 128 --n-epoch 3 --batch-size 3
 ```
