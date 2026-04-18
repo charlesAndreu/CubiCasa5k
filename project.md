@@ -7,6 +7,13 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+or with conda
+```bash
+conda create -n charles-cubicasa python=3.11
+conda activate charles-cubicasa
+pip install -r requirements.txt
+```
+
 
 # Creating the LMDB database
 ```bash
@@ -30,6 +37,12 @@ python create_lmdb.py --txt debug/test.txt --data-path data/cubicasa5k/ --lmdb d
 python train_simple.py --debug --segmentation-map room --data-path data/cubicasa5k/debug/ --image-size 128 --n-epoch 3 --batch-size 3
 ```
 
+generate images on tensorboard:
+```bash
+python train_simple.py   --segmentation-map room   --data-path data/cubicasa5k/debug/    --n-epoch 100   --batch-size 3   --debug --plot-samples
+# launch tensorboard
+tensorboard --logdir runs_cubi --port 6006
+```
 
 
 # Visualizing the LMDB database
