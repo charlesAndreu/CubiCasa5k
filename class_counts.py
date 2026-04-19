@@ -14,12 +14,11 @@ def _label_to_numpy_ch(label_2hw, ch: int) -> np.ndarray:
     return np.asarray(label_2hw[ch]).ravel()
 
 
-def build_class_frequencies_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
+def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
+    """Sum of per-class pixel counts over the whole LMDB (per image: bincount, then add)."""
     lmdb_path = os.path.abspath(lmdb_path)
     sum_room = np.zeros(N_ROOM_CLASSES, dtype=np.float64)
     sum_icon = np.zeros(N_ICON_CLASSES, dtype=np.float64)
-    n_room = 0
-    n_icon = 0
     env = lmdb.open(
         lmdb_path,
         readonly=True,
@@ -34,7 +33,7 @@ def build_class_frequencies_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
             for _key, value in tqdm(
                 txn.cursor(),
                 total=n_entries,
-                desc="Class frequencies",
+                desc="Class counts",
                 ncols=80,
             ):
                 sample = pickle.loads(value)
@@ -46,23 +45,9 @@ def build_class_frequencies_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
                     np.int64
                 )
                 rc = np.bincount(r, minlength=N_ROOM_CLASSES).astype(np.float64)
-                rt = float(rc.sum())
-                if rt > 0:
-                    sum_room += rc / rt
-                    n_room += 1
+                sum_room += rc
                 icc = np.bincount(ic, minlength=N_ICON_CLASSES).astype(np.float64)
-                it = float(icc.sum())
-                if it > 0:
-                    sum_icon += icc / it
-                    n_icon += 1
+                sum_icon += icc
     finally:
         env.close()
-    if n_room <= 0:
-        room_list = [0.0] * N_ROOM_CLASSES
-    else:
-        room_list = (sum_room / n_room).tolist()
-    if n_icon <= 0:
-        icon_list = [0.0] * N_ICON_CLASSES
-    else:
-        icon_list = (sum_icon / n_icon).tolist()
-    return {"room": room_list, "icon": icon_list}
+    return {"room": sum_room.tolist(), "icon": sum_icon.tolist()}

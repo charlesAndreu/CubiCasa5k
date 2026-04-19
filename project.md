@@ -76,6 +76,35 @@ premier entraînement avec les valeurs par défaut sur 350 epochs
 nohup python train_simple.py   --segmentation-map room  --n-epoch 350 --plot-samples &
 ```
 
+weighted cross-entropy:
+```bash
+python train_simple.py   --segmentation-map room  --n-epoch 350 --plot-samples --criterion weighted-cross-entropy
+```
+
+Si on fait simplement la moyenne de l'inverse de la fréquence, on obtient des poids très déséquilibrés, surtout pour les icons.
+poids:
+```bash
+# formula : 
+weights = 1.0 / (freqs + 1e-6)
+weights = weights / weights.mean() # keep weights mean equal to 1
+# rooms
+[0.0469, 0.3466, 0.2120, 0.3620, 0.2044, 0.2325, 0.7592, 0.5222, 5.3676, 1.3282, 2.4445, 0.1737]
+# icons
+[7.6781e-04, 4.8298e-02, 1.0481e-01, 3.6481e-02, 7.8813e-02, 3.3583e-01,  1.9796e-01, 1.1102e-01, 7.4211e-01, 1.2648e+00, 8.0791e+00]
+```
+Il vaut mieux calculer avec la racine carrée et mettre un "clamping" pour éviter les valeurs infinies. Mais cela donne des poids semblables à toutes les classes sauf la classe dominante. On perd de l'information.
+```bash
+# formula : 
+weights = 1.0 / torch.sqrt(freqs + 1e-6)
+weights = torch.clamp(weights, max=5.0)
+weights = weights / weights.mean()
+# rooms
+[0.3873, 1.0526, 0.8231, 1.0757, 0.8083, 0.8621, 1.2492, 1.2492, 1.2492, 1.2492, 1.2492, 0.7451]
+# icons
+[0.2228, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777]
+```
+Il vaut mieux utiliser le "effective number of samples". E_n=(1-Beta)^N/(1-Beta) Beta=0.9999, N=nombre de classes.
+
 tensorboard:
 ```bash
 tensorboard --logdir runs_cubi --port 6006

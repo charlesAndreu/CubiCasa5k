@@ -354,6 +354,27 @@ class SegmentationMapTrainer:
         path = os.path.join(self.log_dir, filename)
         torch.save(state, path)
 
+    def setup_criterion(self):
+        criterion = self.args.criterion
+        if criterion == "cross-entropy":
+            self.criterion = nn.CrossEntropyLoss().to(self.device)
+        elif criterion == "weighted-cross-entropy":
+            with open("class_frequencies.json", "r") as f:
+                class_frequencies = json.load(f)
+            freqs = torch.tensor(
+                class_frequencies[self.segmentation_map], device=self.device
+            )
+            Beta = 0.9999
+            N = 5000 * freqs
+            weights = (1 - Beta) / (1 - Beta**N)
+            self.criterion = nn.CrossEntropyLoss(weight=weights).to(self.device)
+        elif criterion == "focal-loss":
+            pass
+        elif criterion == "dice-loss":
+            pass
+        else:
+            raise ValueError(f"Invalid criterion: {criterion}")
+
     def train(self):
 
         with open(self.log_dir + "/args.json", "w") as out:
@@ -365,7 +386,7 @@ class SegmentationMapTrainer:
         self.model_setup()
         self.draw_tensorboard_graph()
         self.setup_optimizer()
-        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.setup_criterion()
 
         first_best = True
         best_val_loss = np.inf
@@ -536,6 +557,13 @@ if __name__ == "__main__":
         type=str,
         default="adam-patience-previous-best",
         help="Optimizer to use ['adam, sgd']",
+    )
+    parser.add_argument(
+        "--criterion",
+        nargs="?",
+        type=str,
+        default="cross-entropy",
+        help="Criterion to use ['cross-entropy, weighted-cross-entropy, focal-loss, dice-loss']",
     )
     parser.add_argument(
         "--data-path",
