@@ -71,6 +71,19 @@ python train_simple.py   --segmentation-map room   --data-path data/cubicasa5k/d
 tensorboard --logdir runs_cubi --port 6006
 ```
 
+premier entraînement avec les valeurs par défaut sur 350 epochs
+```bash
+nohup python train_simple.py   --segmentation-map room  --n-epoch 350 --plot-samples &
+```
+
+tensorboard:
+```bash
+tensorboard --logdir runs_cubi --port 6006
+```
+logs:
+```bash
+tail -f runs_cubi/train.log
+```
 
 # Visualizing the LMDB database
 ```bash

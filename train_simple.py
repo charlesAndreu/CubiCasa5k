@@ -567,7 +567,7 @@ if __name__ == "__main__":
         "--patience",
         nargs="?",
         type=int,
-        default=10,
+        default=20,
         help="Learning rate drop patience",
     )
     parser.add_argument(

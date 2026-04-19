@@ -13,3 +13,4 @@ __pycache__/
 
 .venv/*
 floortrans_legacy/*
+nohup.out
