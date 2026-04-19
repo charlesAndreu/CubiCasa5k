@@ -268,21 +268,19 @@ def calc_distance(point_1, point_2):
 
 
 def get_gaussian2D(ndim, sigma=0.25):
+    """2D Gaussian kernel; vectorized (same values as the former nested loops)."""
+    if ndim <= 0:
+        return np.zeros((max(ndim, 0), max(ndim, 0)), dtype=np.float64)
     over_sigmau = 1.0 / (sigma * ndim)
     over_sigmav = 1.0 / (sigma * ndim)
-    dst_data = np.zeros((ndim, ndim))
-
     mean_u = 0.5 * ndim + 0.5
     mean_v = 0.5 * ndim + 0.5
-
-    for v in range(ndim):
-        for u in range(ndim):
-            du = (u + 1 - mean_u) * over_sigmau
-            dv = (v + 1 - mean_v) * over_sigmav
-            value = np.exp(-0.5 * (du * du + dv * dv))
-            dst_data[v][u] = value
-
-    return dst_data
+    u = np.arange(1, ndim + 1, dtype=np.float64)
+    v = np.arange(1, ndim + 1, dtype=np.float64)
+    du = (u - mean_u) * over_sigmau
+    dv = (v - mean_v) * over_sigmav
+    du2, dv2 = np.broadcast_arrays(du[np.newaxis, :], dv[:, np.newaxis])
+    return np.exp(-0.5 * (du2 * du2 + dv2 * dv2))
 
 
 def draw_junction(index, point, width, height, axes):

@@ -14,9 +14,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from datetime import datetime
+from floortrans.loaders.augmentations import (
+    RandomCropToSizeTorch,
+    ResizePaddedTorch,
+    Compose,
+    DictToTensor,
+    ColorJitterTorch,
+    RandomRotations,
+)
+from torchvision.transforms import RandomChoice
 from torch.utils import data
 from tqdm import tqdm
 
+from floortrans.loaders import FloorplanSVG
 from floortrans.loaders.room_icon_loaders import (
     RoomLoader,
     IconLoader,
@@ -40,15 +50,25 @@ class SegmentationMapTrainer:
         self.logger = logger
         self.n_output_channels = 12 if self.segmentation_map == "room" else 11
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.simple_loader = getattr(self.args, "dataset_loader", "floorplan") == "simple"
 
     def prepare_segmentation_target(self, labels, output_hw):
         """
-        Prepare the segmentation target for CrossEntropyLoss from RoomLoader/IconLoader
-        labels ``(N, 1, H, W)`` or ``(N, H, W)`` (class indices).
+        Prepare the segmentation target for the CrossEntropyLoss.
+        Room/icon map from full label stack -> (N, H, W) long for CrossEntropyLoss.
+
+        labels: (N, 23, H, W) for full stack, or (N, 1, H, W) when ``--dataset-loader simple``.
+        output_hw: (H, W) must match logits spatial size.
         """
-        t = labels.float()
-        if t.dim() == 3:
-            t = t.unsqueeze(1)
+        if self.simple_loader:
+            t = labels.float()
+            if t.dim() == 3:
+                t = t.unsqueeze(1)
+            if t.shape[2:] != output_hw:
+                t = F.interpolate(t, size=output_hw, mode="nearest")
+            return t.squeeze(1).long()
+        ch = 21 if self.segmentation_map == "room" else 22
+        t = labels[:, ch : ch + 1, :, :].float()
         if t.shape[2:] != output_hw:
             t = F.interpolate(t, size=output_hw, mode="nearest")
         return t.squeeze(1).long()
@@ -66,28 +86,73 @@ class SegmentationMapTrainer:
             meminit=False,
         )
 
-        self.logger.info(
-            "LMDB loader is %sLoader",
-            "Room" if self.segmentation_map == "room" else "Icon",
-        )
-        train_aug = build_simple_train_augmentations(self.args)
-        val_aug = build_simple_val_augmentations(self.args)
-        LoaderCls = RoomLoader if self.segmentation_map == "room" else IconLoader
-        train_set = LoaderCls(self.args.data_path, "train.txt", lmdb_env, train_aug)
-        val_set = LoaderCls(self.args.data_path, "val.txt", lmdb_env, val_aug)
+        if self.simple_loader:
+            self.logger.info(
+                "Using simple LMDB loader (no heatmaps): %sLoader",
+                "Room" if self.segmentation_map == "room" else "Icon",
+            )
+            train_aug = build_simple_train_augmentations(self.args)
+            val_aug = build_simple_val_augmentations(self.args)
+            LoaderCls = RoomLoader if self.segmentation_map == "room" else IconLoader
+            train_set = LoaderCls(
+                self.args.data_path, "train.txt", lmdb_env, train_aug
+            )
+            val_set = LoaderCls(self.args.data_path, "val.txt", lmdb_env, val_aug)
+        else:
+            if self.args.scale:
+                aug = Compose(
+                    [
+                        RandomChoice(
+                            [
+                                RandomCropToSizeTorch(
+                                    data_format="dict",
+                                    size=(self.args.image_size, self.args.image_size),
+                                ),
+                                ResizePaddedTorch(
+                                    (0, 0),
+                                    data_format="dict",
+                                    size=(self.args.image_size, self.args.image_size),
+                                ),
+                            ]
+                        ),
+                        RandomRotations(format="cubi"),
+                        DictToTensor(),
+                        ColorJitterTorch(),
+                    ]
+                )
+            else:
+                aug = Compose(
+                    [
+                        RandomCropToSizeTorch(
+                            data_format="dict",
+                            size=(self.args.image_size, self.args.image_size),
+                        ),
+                        RandomRotations(format="cubi"),
+                        DictToTensor(),
+                        ColorJitterTorch(),
+                    ]
+                )
+            train_set = FloorplanSVG(
+                self.args.data_path,
+                "train.txt",
+                format="lmdb",
+                augmentations=aug,
+                lmdb_env=lmdb_env,
+            )
+            val_set = FloorplanSVG(
+                self.args.data_path,
+                "val.txt",
+                format="lmdb",
+                augmentations=DictToTensor(),
+                lmdb_env=lmdb_env,
+            )
 
         if self.args.debug:
             num_workers = 0
             print("In debug mode.")
             self.logger.info("In debug mode.")
         else:
-            num_workers = max(0, self.args.num_workers)
-
-        self.logger.info(
-            "DataLoader num_workers=%s prefetch_factor=%s",
-            num_workers,
-            max(2, int(self.args.prefetch_factor)) if num_workers > 0 else "n/a",
-        )
+            num_workers = 4
 
         _dl_common = dict(
             num_workers=num_workers,
@@ -95,7 +160,7 @@ class SegmentationMapTrainer:
             persistent_workers=num_workers > 0,
         )
         if num_workers > 0:
-            _dl_common["prefetch_factor"] = max(2, int(self.args.prefetch_factor))
+            _dl_common["prefetch_factor"] = 2
         trainloader = data.DataLoader(
             train_set,
             batch_size=self.args.batch_size,
@@ -226,20 +291,36 @@ class SegmentationMapTrainer:
                 )
                 if first_best:
                     self.writer.add_image("Image " + str(i), images_val[0])
-                    gt = labels_val[0, 0].detach().cpu().numpy()
-                    fig = plt.figure(figsize=(10, 8))
-                    plot = fig.add_subplot(111)
-                    cax = plot.imshow(
-                        gt,
-                        vmin=0,
-                        vmax=self.n_output_channels - 1,
-                        cmap=plt.cm.tab20,
-                    )
-                    fig.colorbar(cax)
-                    self.writer.add_figure(
-                        "Image " + str(i) + " label/" + self.segmentation_map,
-                        fig,
-                    )
+                    if self.simple_loader:
+                        gt = labels_val[0, 0].detach().cpu().numpy()
+                        fig = plt.figure(figsize=(10, 8))
+                        plot = fig.add_subplot(111)
+                        cax = plot.imshow(
+                            gt,
+                            vmin=0,
+                            vmax=self.n_output_channels - 1,
+                            cmap=plt.cm.tab20,
+                        )
+                        fig.colorbar(cax)
+                        self.writer.add_figure(
+                            "Image " + str(i) + " label/" + self.segmentation_map,
+                            fig,
+                        )
+                    else:
+                        for j, l in enumerate(
+                            labels_val.squeeze().detach().cpu().numpy()
+                        ):
+                            fig = plt.figure(figsize=(18, 12))
+                            plot = fig.add_subplot(111)
+                            if j < 21:
+                                cax = plot.imshow(l, vmin=0, vmax=1)
+                            else:
+                                cax = plot.imshow(l, vmin=0, vmax=19, cmap=plt.cm.tab20)
+                            fig.colorbar(cax)
+                            self.writer.add_figure(
+                                "Image " + str(i) + " label/Channel " + str(j),
+                                fig,
+                            )
                 outputs = self.model(images_val)
                 pred_map = outputs[0].argmax(dim=0).detach().cpu().numpy()
                 fig = plt.figure(figsize=(18, 12))
@@ -519,6 +600,16 @@ if __name__ == "__main__":
         help="The segmentation map to train on. Must be 'room' or 'icon'.",
     )
     parser.add_argument(
+        "--dataset-loader",
+        type=str,
+        default="floorplan",
+        choices=["floorplan", "simple"],
+        help=(
+            "'floorplan': FloorplanSVG + DictToTensor (heatmaps). "
+            "'simple': RoomLoader or IconLoader (image + one seg channel only, faster)."
+        ),
+    )
+    parser.add_argument(
         "--optimizer",
         nargs="?",
         type=str,
@@ -599,27 +690,12 @@ if __name__ == "__main__":
         help="Use DataLoader with num_workers=0 for easier debugging.",
     )
     parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=2,
-        help=(
-            "DataLoader worker processes when not --debug. Each worker is limited to "
-            "one compute thread to avoid pegging all CPU cores. Raise (e.g. 4–8) if the GPU starves."
-        ),
-    )
-    parser.add_argument(
-        "--prefetch-factor",
-        type=int,
-        default=2,
-        help="Per-worker batch prefetch when num_workers>0 (PyTorch requires >= 2).",
-    )
-    parser.add_argument(
         "--plot-samples",
         nargs="?",
         type=bool,
         default=False,
         const=True,
-        help="Plot validation images and segmentation to TensorBoard.",
+        help="Plot floorplan segmentations to Tensorboard.",
     )
     parser.add_argument(
         "--scale",
