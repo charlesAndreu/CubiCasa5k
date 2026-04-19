@@ -103,7 +103,16 @@ weights = weights / weights.mean()
 # icons
 [0.2228, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777]
 ```
-Il vaut mieux utiliser le "effective number of samples". E_n=(1-Beta)^N/(1-Beta) Beta=0.9999, N=nombre de classes.
+Il vaut mieux utiliser le "effective number of samples". E_n=(1-Beta)^N/(1-Beta) Beta=0.9999, N=nombre de classes, et prendre w_n = 1/E_n.
+```bash
+# formula : 
+E_n = (1-Beta)^N/(1-Beta)
+w_n = 1/E_n
+# rooms
+[0.3873, 1.0526, 0.8231, 1.0757, 0.8083, 0.8621, 1.2492, 1.2492, 1.2492, 1.2492, 1.2492, 0.7451]
+# icons
+[0.2228, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777]
+```
 
 tensorboard:
 ```bash
