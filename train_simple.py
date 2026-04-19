@@ -127,7 +127,7 @@ class SegmentationMapTrainer:
             print("In debug mode.")
             self.logger.info("In debug mode.")
         else:
-            num_workers = 8
+            num_workers = 4
 
         trainloader = data.DataLoader(
             train_set,
