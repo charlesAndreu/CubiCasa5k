@@ -357,8 +357,6 @@ class SegmentationMapTrainer:
 
         first_best = True
         best_val_loss = np.inf
-        best_train_loss = np.inf
-        best_acc = 0
         start_epoch = 0
         running_metrics_map_val = runningScore(self.n_output_channels)
         best_val_loss_variance = np.inf
@@ -485,23 +483,6 @@ class SegmentationMapTrainer:
 
                 first_best = False
 
-            px_acc = score["Mean Acc"]
-            if px_acc > best_acc:
-                best_acc = px_acc
-                self.logger.info("Best validation pixel accuracy found saving model...")
-                self.save_checkpoint(
-                    "model_best_val_acc.pkl",
-                    epoch + 1,
-                )
-
-            if train_loss < best_train_loss:
-                best_train_loss = train_loss
-                self.logger.info("Best training loss with variance...")
-                self.save_checkpoint(
-                    "model_best_train_loss_var.pkl",
-                    epoch + 1,
-                )
-
         self.logger.info("Last epoch done saving final model...")
         self.save_checkpoint("model_last_epoch.pkl", epoch + 1)
         if self.writer is not None:
@@ -601,7 +582,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=2,
+        default=16,
         help=(
             "DataLoader worker processes when not --debug. Each worker is limited to "
             "one compute thread to avoid pegging all CPU cores. Raise (e.g. 4–8) if the GPU starves."
@@ -610,7 +591,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prefetch-factor",
         type=int,
-        default=2,
+        default=4,
         help="Per-worker batch prefetch when num_workers>0 (PyTorch requires >= 2).",
     )
     parser.add_argument(

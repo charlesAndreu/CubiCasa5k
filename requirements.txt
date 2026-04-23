@@ -1,20 +1,23 @@
+# Install PyTorch with a CUDA build compatible with your driver, e.g.:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 torch
 torchvision
-numpy
-pandas
-tqdm
 
-opencv-python-headless
-Pillow
-lmdb
+numpy>=1.26
+pandas>=2.2
+scipy>=1.11
+scikit-image>=0.22
 
-scipy
-scikit-image
-shapely
-svgpathtools
+opencv-python-headless>=4.10
+Pillow>=10.3
+lmdb>=1.5
 
-matplotlib
-tensorboardX
-tensorboard
+shapely>=2.0
+svgpathtools>=1.6
 
-flask
+matplotlib>=3.8
+tqdm>=4.66
+tensorboard>=2.16
+tensorboardX>=2.6
+
+flask>=3.0

@@ -1,3 +1,4 @@
+import json
 import os
 import pickle
 
@@ -9,16 +10,11 @@ from tqdm import tqdm
 N_ROOM_CLASSES = 12
 N_ICON_CLASSES = 11
 
-
-def _label_to_numpy_ch(label_2hw, ch: int) -> np.ndarray:
-    return np.asarray(label_2hw[ch]).ravel()
-
-
 def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
     """Sum of per-class pixel counts over the whole LMDB (per image: bincount, then add)."""
     lmdb_path = os.path.abspath(lmdb_path)
-    sum_room = np.zeros(N_ROOM_CLASSES, dtype=np.float64)
-    sum_icon = np.zeros(N_ICON_CLASSES, dtype=np.float64)
+    sum_room = np.zeros(N_ROOM_CLASSES, dtype=np.int64)
+    sum_icon = np.zeros(N_ICON_CLASSES, dtype=np.int64)
     env = lmdb.open(
         lmdb_path,
         readonly=True,
@@ -38,16 +34,21 @@ def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
             ):
                 sample = pickle.loads(value)
                 lab = sample["label"]
-                r = np.clip(_label_to_numpy_ch(lab, 0), 0, N_ROOM_CLASSES - 1).astype(
+                r = np.clip(np.asarray(lab[0]).ravel(), 0, N_ROOM_CLASSES - 1).astype(
                     np.int64
                 )
-                ic = np.clip(_label_to_numpy_ch(lab, 1), 0, N_ICON_CLASSES - 1).astype(
+                ic = np.clip(np.asarray(lab[1]).ravel(), 0, N_ICON_CLASSES - 1).astype(
                     np.int64
                 )
-                rc = np.bincount(r, minlength=N_ROOM_CLASSES).astype(np.float64)
+                rc = np.bincount(r, minlength=N_ROOM_CLASSES)
                 sum_room += rc
-                icc = np.bincount(ic, minlength=N_ICON_CLASSES).astype(np.float64)
+                icc = np.bincount(ic, minlength=N_ICON_CLASSES)
                 sum_icon += icc
     finally:
         env.close()
     return {"room": sum_room.tolist(), "icon": sum_icon.tolist()}
+
+if __name__ == "__main__":
+    class_counts = build_class_counts_dict()
+    with open("class_counts.json", "w") as f:
+        json.dump(class_counts, f)

@@ -12,6 +12,8 @@ or with conda
 conda create -n charles-cubicasa python=3.11
 conda activate charles-cubicasa
 pip install -r requirements.txt
+# pour mon système : version de torch compatible avec la version de CUDA 12.4
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
 
