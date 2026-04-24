@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from class_counts import Weights
 from datetime import datetime
 from torch.utils import data
 from tqdm import tqdm
@@ -28,6 +29,27 @@ from floortrans.metrics import runningScore
 
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, weight=None, reduction="mean"):
+        super().__init__()
+        self.gamma = float(gamma)
+        if weight is not None:
+            self.register_buffer("weight", weight.detach().clone().float())
+        else:
+            self.register_buffer("weight", None)
+        self.reduction = reduction
+
+    def forward(self, logits, target):
+        ce = F.cross_entropy(logits, target, weight=self.weight, reduction="none")
+        pt = torch.exp(-ce)
+        loss = ((1.0 - pt) ** self.gamma) * ce
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
 
 
 class SegmentationMapTrainer:
@@ -321,22 +343,34 @@ class SegmentationMapTrainer:
         path = os.path.join(self.log_dir, filename)
         torch.save(state, path)
 
+    def setup_loss_weights(self):
+        if not self.args.weights_method:
+            return None
+        with open("class_counts.json", "r") as f:
+            class_counts = json.load(f)
+        counts = torch.tensor(
+            class_counts[self.segmentation_map], dtype=torch.float32
+        )
+        weights = Weights(counts).weights(method=self.args.weights_method)
+        logger.info(f"Setting up loss weights: {weights}")
+        return weights
+
     def setup_criterion(self):
         criterion = self.args.criterion
+        # cross-entropy loss
         if criterion == "cross-entropy":
             self.criterion = nn.CrossEntropyLoss().to(self.device)
+        # weighted cross-entropy loss
         elif criterion == "weighted-cross-entropy":
-            with open("class_frequencies.json", "r") as f:
-                class_frequencies = json.load(f)
-            freqs = torch.tensor(
-                class_frequencies[self.segmentation_map], device=self.device
-            )
-            Beta = 0.9999
-            N = 5000 * freqs
-            weights = (1 - Beta) / (1 - Beta**N)
+            weights = self.setup_loss_weights()
             self.criterion = nn.CrossEntropyLoss(weight=weights).to(self.device)
+        # focal loss
         elif criterion == "focal-loss":
-            pass
+            weights = self.setup_loss_weights()
+            self.criterion = FocalLoss(
+                gamma=self.args.focal_gamma, weight=weights, reduction="mean"
+            ).to(self.device)
+        # dice loss
         elif criterion == "dice-loss":
             pass
         else:
@@ -514,6 +548,24 @@ if __name__ == "__main__":
         help="Criterion to use ['cross-entropy, weighted-cross-entropy, focal-loss, dice-loss']",
     )
     parser.add_argument(
+        "--weights-method",
+        nargs="?",
+        type=str,
+        default="inverse_sqrt_frequency",
+        choices=["effective_num", "inverse_sqrt_frequency", "inverse_frequency"],
+        help=(
+            "Class weighting method for --criterion=weighted-cross-entropy "
+            "(requires class_counts.json)."
+        ),
+    )
+    parser.add_argument(
+        "--focal-gamma",
+        nargs="?",
+        type=float,
+        default=2.0,
+        help="Gamma focusing parameter used when --criterion=focal-loss.",
+    )
+    parser.add_argument(
         "--data-path",
         nargs="?",
         type=str,
@@ -521,7 +573,7 @@ if __name__ == "__main__":
         help="Path to data directory",
     )
     parser.add_argument(
-        "--n-epoch", nargs="?", type=int, default=1000, help="# of the epochs"
+        "--n-epoch", nargs="?", type=int, default=400, help="# of the epochs"
     )
     parser.add_argument(
         "--batch-size", nargs="?", type=int, default=26, help="Batch Size"

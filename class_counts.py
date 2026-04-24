@@ -1,7 +1,7 @@
 import json
 import os
 import pickle
-
+import torch
 import lmdb
 import numpy as np
 from tqdm import tqdm
@@ -47,6 +47,37 @@ def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
     finally:
         env.close()
     return {"room": sum_room.tolist(), "icon": sum_icon.tolist()}
+
+
+class Weights:
+    def __init__(self, counts):
+        self.counts = counts
+
+    def weights(self, method="effective_num"):
+        if method == "effective_num":
+            return self.effective_num()
+        elif method == "inverse_sqrt_frequency":
+            return self.inverse_sqrt_frequency()
+        elif method == "inverse_frequency":
+            return self.inverse_frequency()
+        else:
+            raise ValueError(f"Invalid method: {method}")
+
+    def effective_num(self, beta=0.9999):
+        effective_num = 1.0 - beta ** self.counts.float()
+        weights = (1.0 - beta) / (effective_num + 1e-6)
+        weights = weights / weights.mean()
+        return weights
+
+    def inverse_sqrt_frequency(self):
+        weights = 1.0 / torch.sqrt(self.counts.float() + 1e-6)
+        weights = weights / weights.mean()
+        return weights
+
+    def inverse_frequency(self):
+        weights = 1.0 / (self.counts.float() + 1e-6)
+        weights = weights / weights.mean()
+        return weights
 
 if __name__ == "__main__":
     class_counts = build_class_counts_dict()
