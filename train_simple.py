@@ -203,35 +203,13 @@ class SegmentationMapTrainer:
         if v is not None:
             self.writer.add_scalar(tag, v, global_step=step)
 
-    def _log_tb_scalars(self, main_tag, values, step):
-        if self.writer is None:
-            return
-        finite_values = {}
-        for name, value in values.items():
-            v = self._tb_finite_float(value)
-            if v is not None:
-                finite_values[name] = v
-        if finite_values:
-            self.writer.add_scalars(main_tag, finite_values, global_step=step)
-
-    def compute_grad_norm(self):
-        total_sq = 0.0
-        for p in self.model.parameters():
-            if p.grad is None:
-                continue
-            grad_norm = p.grad.detach().data.norm(2).item()
-            total_sq += grad_norm * grad_norm
-        return math.sqrt(total_sq)
-
-    def tensorboard_log_training_scalars(self, epoch, train_loss, grad_norm_stats=None):
+    def tensorboard_log_training_scalars(self, epoch, train_loss):
         if self.writer is None:
             return
         step = 1 + epoch
         lr = self.optimizer.param_groups[0]["lr"]
         self._log_tb_scalar("training/loss", train_loss, step)
         self._log_tb_scalar("training/lr", lr, step)
-        if grad_norm_stats is not None:
-            self._log_tb_scalars("training/grad_norm", grad_norm_stats, step)
 
     def tensorboard_log_validation_loss(self, epoch, val_loss_mean):
         self._log_tb_scalar("validation/loss", val_loss_mean, 1 + epoch)
@@ -418,16 +396,6 @@ class SegmentationMapTrainer:
         for epoch in range(start_epoch, self.args.n_epoch):
             self.model.train()
             epoch_train_losses = []
-            epoch_grad_norms = []
-            n_train_batches = len(trainloader)
-            grad_sample_steps = set(
-                np.linspace(
-                    0,
-                    n_train_batches - 1,
-                    num=min(20, n_train_batches),
-                    dtype=int,
-                ).tolist()
-            )
             # ------------------------------------------------------------
             # Training
             # ------------------------------------------------------------
@@ -453,25 +421,16 @@ class SegmentationMapTrainer:
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                if i in grad_sample_steps:
-                    epoch_grad_norms.append(self.compute_grad_norm())
                 self.optimizer.step()
 
             train_loss = float(np.mean(epoch_train_losses))
-            grad_norm_stats = None
-            if len(epoch_grad_norms) > 0:
-                grad_norm_stats = {
-                    "mean": float(np.mean(epoch_grad_norms)),
-                    "min": float(np.min(epoch_grad_norms)),
-                    "max": float(np.max(epoch_grad_norms)),
-                }
 
             self.logger.info(
                 "Epoch [%d/%d] Loss: %.4f"
                 % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
-            self.tensorboard_log_training_scalars(epoch, train_loss, grad_norm_stats)
+            self.tensorboard_log_training_scalars(epoch, train_loss)
 
             # ------------------------------------------------------------
             # Validation

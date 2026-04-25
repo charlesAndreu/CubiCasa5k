@@ -7,10 +7,10 @@ segmentation_map: room
 #   (reload best checkpoint + reduce LR by x0.1 after plateau)
 # - sgd: SGD with polynomial-style LambdaLR decay
 # - adam-scheduler: Adam with step-like LambdaLR decay (via l_rate_drop)
-optimizer: adam-patience-previous-best
+optimizer: adam-patience
 
 # Loss setup
-criterion: focal-loss
+criterion: weighted-cross-entropy
 weights_method: inverse_sqrt_frequency # used by weighted CE / focal
 focal_gamma: 2.0 # used when criterion = focal-loss
 
