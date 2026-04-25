@@ -1,0 +1,40 @@
+# Segmentation target: room or icon
+segmentation_map: room
+
+# Optimizer strategy (choices):
+# - adam-patience: Adam + ReduceLROnPlateau on val loss
+# - adam-patience-previous-best: Adam + manual patience logic
+#   (reload best checkpoint + reduce LR by x0.1 after plateau)
+# - sgd: SGD with polynomial-style LambdaLR decay
+# - adam-scheduler: Adam with step-like LambdaLR decay (via l_rate_drop)
+optimizer: adam-patience-previous-best
+
+# Loss setup
+criterion: focal-loss
+weights_method: inverse_sqrt_frequency # used by weighted CE / focal
+focal_gamma: 2.0 # used when criterion = focal-loss
+
+# Data and training length
+data_path: data/cubicasa5k/
+n_epoch: 300
+batch_size: 26
+image_size: 256
+
+# Learning-rate controls
+l_rate: 0.001
+l_rate_drop: 200 # used by adam-scheduler
+patience: 20 # used by patience-based optimizers
+
+# Checkpoints
+furukawa_weights: null # optional pretrained Furukawa weights
+resume_from: null # optional train_simple checkpoint to resume
+
+# Logging
+log_path: runs_cubi/
+plot_samples: true # log validation image/prediction samples to TensorBoard
+
+# DataLoader / augmentation flags
+debug: false # set true to force num_workers=0
+num_workers: 16
+prefetch_factor: 4
+scale: false # enable resize-padded augmentation branch

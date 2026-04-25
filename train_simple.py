@@ -6,15 +6,16 @@ import sys
 import os
 import logging
 import json
-import argparse
 import math
 import lmdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import yaml  # type: ignore[reportMissingModuleSource]
 from class_counts import Weights
 from datetime import datetime
+from types import SimpleNamespace
 from torch.utils import data
 from tqdm import tqdm
 
@@ -32,24 +33,19 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, weight=None, reduction="mean"):
+    def __init__(self, gamma=2.0, weight=None):
         super().__init__()
         self.gamma = float(gamma)
         if weight is not None:
             self.register_buffer("weight", weight.detach().clone().float())
         else:
             self.register_buffer("weight", None)
-        self.reduction = reduction
 
     def forward(self, logits, target):
         ce = F.cross_entropy(logits, target, weight=self.weight, reduction="none")
         pt = torch.exp(-ce)
         loss = ((1.0 - pt) ** self.gamma) * ce
-        if self.reduction == "mean":
-            return loss.mean()
-        if self.reduction == "sum":
-            return loss.sum()
-        return loss
+        return loss.mean() # mean reduction
 
 
 class SegmentationMapTrainer:
@@ -207,13 +203,35 @@ class SegmentationMapTrainer:
         if v is not None:
             self.writer.add_scalar(tag, v, global_step=step)
 
-    def tensorboard_log_training_scalars(self, epoch, train_loss):
+    def _log_tb_scalars(self, main_tag, values, step):
+        if self.writer is None:
+            return
+        finite_values = {}
+        for name, value in values.items():
+            v = self._tb_finite_float(value)
+            if v is not None:
+                finite_values[name] = v
+        if finite_values:
+            self.writer.add_scalars(main_tag, finite_values, global_step=step)
+
+    def compute_grad_norm(self):
+        total_sq = 0.0
+        for p in self.model.parameters():
+            if p.grad is None:
+                continue
+            grad_norm = p.grad.detach().data.norm(2).item()
+            total_sq += grad_norm * grad_norm
+        return math.sqrt(total_sq)
+
+    def tensorboard_log_training_scalars(self, epoch, train_loss, grad_norm_stats=None):
         if self.writer is None:
             return
         step = 1 + epoch
         lr = self.optimizer.param_groups[0]["lr"]
         self._log_tb_scalar("training/loss", train_loss, step)
         self._log_tb_scalar("training/lr", lr, step)
+        if grad_norm_stats is not None:
+            self._log_tb_scalars("training/grad_norm", grad_norm_stats, step)
 
     def tensorboard_log_validation_loss(self, epoch, val_loss_mean):
         self._log_tb_scalar("validation/loss", val_loss_mean, 1 + epoch)
@@ -368,7 +386,7 @@ class SegmentationMapTrainer:
         elif criterion == "focal-loss":
             weights = self.setup_loss_weights()
             self.criterion = FocalLoss(
-                gamma=self.args.focal_gamma, weight=weights, reduction="mean"
+                gamma=self.args.focal_gamma, weight=weights
             ).to(self.device)
         # dice loss
         elif criterion == "dice-loss":
@@ -400,6 +418,16 @@ class SegmentationMapTrainer:
         for epoch in range(start_epoch, self.args.n_epoch):
             self.model.train()
             epoch_train_losses = []
+            epoch_grad_norms = []
+            n_train_batches = len(trainloader)
+            grad_sample_steps = set(
+                np.linspace(
+                    0,
+                    n_train_batches - 1,
+                    num=min(20, n_train_batches),
+                    dtype=int,
+                ).tolist()
+            )
             # ------------------------------------------------------------
             # Training
             # ------------------------------------------------------------
@@ -425,15 +453,25 @@ class SegmentationMapTrainer:
 
                 self.optimizer.zero_grad()
                 loss.backward()
+                if i in grad_sample_steps:
+                    epoch_grad_norms.append(self.compute_grad_norm())
                 self.optimizer.step()
 
             train_loss = float(np.mean(epoch_train_losses))
+            grad_norm_stats = None
+            if len(epoch_grad_norms) > 0:
+                grad_norm_stats = {
+                    "mean": float(np.mean(epoch_grad_norms)),
+                    "min": float(np.min(epoch_grad_norms)),
+                    "max": float(np.max(epoch_grad_norms)),
+                }
 
             self.logger.info(
-                "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
+                "Epoch [%d/%d] Loss: %.4f"
+                % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
-            self.tensorboard_log_training_scalars(epoch, train_loss)
+            self.tensorboard_log_training_scalars(epoch, train_loss, grad_norm_stats)
 
             # ------------------------------------------------------------
             # Validation
@@ -525,144 +563,38 @@ class SegmentationMapTrainer:
 
 if __name__ == "__main__":
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    parser = argparse.ArgumentParser(description="Hyperparameters")
-    parser.add_argument(
-        "--segmentation-map",
-        type=str,
-        required=True,
-        choices=["room", "icon"],
-        help="The segmentation map to train on. Must be 'room' or 'icon'.",
-    )
-    parser.add_argument(
-        "--optimizer",
-        nargs="?",
-        type=str,
-        default="adam-patience-previous-best",
-        help="Optimizer to use ['adam, sgd']",
-    )
-    parser.add_argument(
-        "--criterion",
-        nargs="?",
-        type=str,
-        default="cross-entropy",
-        help="Criterion to use ['cross-entropy, weighted-cross-entropy, focal-loss, dice-loss']",
-    )
-    parser.add_argument(
-        "--weights-method",
-        nargs="?",
-        type=str,
-        default="inverse_sqrt_frequency",
-        choices=["effective_num", "inverse_sqrt_frequency", "inverse_frequency"],
-        help=(
-            "Class weighting method for --criterion=weighted-cross-entropy "
-            "(requires class_counts.json)."
-        ),
-    )
-    parser.add_argument(
-        "--focal-gamma",
-        nargs="?",
-        type=float,
-        default=2.0,
-        help="Gamma focusing parameter used when --criterion=focal-loss.",
-    )
-    parser.add_argument(
-        "--data-path",
-        nargs="?",
-        type=str,
-        default="data/cubicasa5k/",
-        help="Path to data directory",
-    )
-    parser.add_argument(
-        "--n-epoch", nargs="?", type=int, default=400, help="# of the epochs"
-    )
-    parser.add_argument(
-        "--batch-size", nargs="?", type=int, default=26, help="Batch Size"
-    )
-    parser.add_argument(
-        "--image-size", nargs="?", type=int, default=256, help="Image size in training"
-    )
-    parser.add_argument(
-        "--l-rate", nargs="?", type=float, default=1e-3, help="Learning Rate"
-    )
-    parser.add_argument(
-        "--l-rate-drop",
-        nargs="?",
-        type=float,
-        default=200,
-        help="Learning rate drop after how many epochs?",
-    )
-    parser.add_argument(
-        "--patience",
-        nargs="?",
-        type=int,
-        default=20,
-        help="Learning rate drop patience",
-    )
-    parser.add_argument(
-        "--furukawa-weights",
-        nargs="?",
-        type=str,
-        default=None,
-        help="Path to previously trained furukawa model weights file .pkl",
-    )
-    parser.add_argument(
-        "--resume-from",
-        nargs="?",
-        type=str,
-        default=None,
-        help=(
-            "Path to a train_simple checkpoint .pkl (e.g. model_best_val_loss.pkl) "
-            "with the segmentation head; loaded after the model is built. "
-            "Do not use for raw 51-ch Furukawa weights (use --furukawa-weights)."
-        ),
-    )
-    parser.add_argument(
-        "--log-path",
-        nargs="?",
-        type=str,
-        default="runs_cubi/",
-        help="Path to log directory",
-    )
-    parser.add_argument(
-        "--debug",
-        nargs="?",
-        type=bool,
-        default=False,
-        const=True,
-        help="Use DataLoader with num_workers=0 for easier debugging.",
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=16,
-        help=(
-            "DataLoader worker processes when not --debug. Each worker is limited to "
-            "one compute thread to avoid pegging all CPU cores. Raise (e.g. 4–8) if the GPU starves."
-        ),
-    )
-    parser.add_argument(
-        "--prefetch-factor",
-        type=int,
-        default=4,
-        help="Per-worker batch prefetch when num_workers>0 (PyTorch requires >= 2).",
-    )
-    parser.add_argument(
-        "--plot-samples",
-        nargs="?",
-        type=bool,
-        default=False,
-        const=True,
-        help="Plot validation images and segmentation to TensorBoard.",
-    )
-    parser.add_argument(
-        "--scale",
-        nargs="?",
-        type=bool,
-        default=False,
-        const=True,
-        help="Rescale to 256x256 augmentation.",
-    )
-    args = parser.parse_args()
+    config_path = "train_simple_config.yaml"
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f) or {}
+    if not isinstance(config_data, dict):
+        raise ValueError("Config file must contain a YAML mapping at top level.")
+    defaults = {
+        "segmentation_map": "room",
+        "optimizer": "adam-patience-previous-best",
+        "criterion": "cross-entropy",
+        "weights_method": "inverse_sqrt_frequency",
+        "focal_gamma": 2.0,
+        "data_path": "data/cubicasa5k/",
+        "n_epoch": 400,
+        "batch_size": 26,
+        "image_size": 256,
+        "l_rate": 1e-3,
+        "l_rate_drop": 200,
+        "patience": 20,
+        "furukawa_weights": None,
+        "resume_from": None,
+        "log_path": "runs_cubi/",
+        "debug": False,
+        "num_workers": 16,
+        "prefetch_factor": 4,
+        "plot_samples": False,
+        "scale": False,
+    }
+    unknown_keys = sorted(set(config_data.keys()) - set(defaults.keys()))
+    if unknown_keys:
+        raise ValueError(f"Unknown config keys in {config_path}: {unknown_keys}")
+
+    args = SimpleNamespace(**{**defaults, **config_data})
 
     log_dir = args.log_path + "/" + time_stamp + "/"
     os.makedirs(log_dir, exist_ok=True)

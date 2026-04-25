@@ -145,3 +145,47 @@ As we are running only one task, we use a simple loss function (that don't need 
 - `CrossEntropyLoss` for segmentation tasks (wall and icon)
 - `MSELoss` for heatmap tasks (junction, icon and opening)
 As optimizer, we keep the possibility to use the same optimizers as in the `train.py` script, and benchmark the results.
+
+
+# tester d'autres scheduler
+| Scheduler         | Quand l’utiliser                |
+| ----------------- | ------------------------------- |
+| ReduceLROnPlateau | si tu veux du contrôle manuel   |
+| CosineAnnealing   | 🔥 choix par défaut moderne     |
+| OneCycleLR        | 🔥 perf max / entraînement fixe |
+| Exponential       | simple et stable                |
+
+=> Cubicasa scheduler uses a hard * 0.1 drop with no floor (min_lr), cooldown, or threshold tuning.
+It treats any tiny fluctuation as improvement/no-improvement (no threshold logic).
+Reloading best weights every patience window can make training jumpy and less smooth.
+It duplicates logic PyTorch already handles robustly.
+
+Use ReduceLROnPlateau(..., mode="min", factor=0.5, patience=..., threshold=1e-4, cooldown=2, min_lr=1e-6)
+
+### Scheduler recommendation for this project
+
+For this CubiCasa setup (long runs, noisy validation curve, segmentation metrics), the safest default is:
+
+```bash
+ReduceLROnPlateau(mode="min", factor=0.5, patience=10-20, threshold=1e-4, cooldown=2, min_lr=1e-6)
+```
+
+Why this is a good default:
+- It reacts to real plateaus on validation loss (instead of fixed epoch milestones).
+- It is robust to small metric noise with `threshold`.
+- It avoids too-frequent LR drops with `cooldown`.
+- It prevents the LR from collapsing too far with `min_lr`.
+
+Other good choices depending on objective:
+- `CosineAnnealingLR`: good if total epochs are fixed and known in advance.
+- `OneCycleLR`: often high performance, but needs careful `max_lr` and total steps.
+- `PolynomialLR`: common baseline in segmentation papers.
+
+Practical decision rule:
+- if validation is noisy or you may stop early -> use `ReduceLROnPlateau`
+- if the training budget is fixed and stable -> use `CosineAnnealingLR`
+- if you want an aggressive tuned run -> try `OneCycleLR`
+
+# ------------------
+j'ajoute le contrôle du gradient norme sur le training.
+sample de 20 steps chaque époque avec min, max et mean.
