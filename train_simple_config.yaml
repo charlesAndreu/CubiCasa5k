@@ -1,5 +1,5 @@
 # Segmentation target: room or icon
-segmentation_map: room
+segmentation_map: icon
 
 # Optimizer strategy (choices):
 # - adam-patience: Adam + ReduceLROnPlateau on val loss
@@ -10,9 +10,11 @@ segmentation_map: room
 optimizer: adam-patience
 
 # Loss setup
-criterion: weighted-cross-entropy
-weights_method: inverse_sqrt_frequency # used by weighted CE / focal
+# criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss
+criterion: cross-entropy-and-dice 
+weights_method: null # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
 focal_gamma: 2.0 # used when criterion = focal-loss
+dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
 
 # Data and training length
 data_path: data/cubicasa5k/

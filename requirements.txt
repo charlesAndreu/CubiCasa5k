@@ -20,5 +20,6 @@ tqdm>=4.66
 PyYAML>=6.0
 tensorboard>=2.16
 tensorboardX>=2.6
+segmentation-models-pytorch
 
 flask>=3.0

@@ -58,6 +58,8 @@ class Weights:
             return self.effective_num()
         elif method == "inverse_sqrt_frequency":
             return self.inverse_sqrt_frequency()
+        elif method == "inverse_double_sqrt_frequency":
+            return self.inverse_double_sqrt_frequency()
         elif method == "inverse_frequency":
             return self.inverse_frequency()
         else:
@@ -71,6 +73,11 @@ class Weights:
 
     def inverse_sqrt_frequency(self):
         weights = 1.0 / torch.sqrt(self.counts.float() + 1e-6)
+        weights = weights / weights.mean()
+        return weights
+
+    def inverse_double_sqrt_frequency(self):
+        weights = 1.0 / torch.pow(self.counts.float() + 1e-6, 0.25)
         weights = weights / weights.mean()
         return weights
 

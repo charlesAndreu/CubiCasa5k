@@ -18,7 +18,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from torch.utils import data
 from tqdm import tqdm
-
+import segmentation_models_pytorch as smp
 from floortrans.loaders.room_icon_loaders import (
     RoomLoader,
     IconLoader,
@@ -47,6 +47,20 @@ class FocalLoss(nn.Module):
         loss = ((1.0 - pt) ** self.gamma) * ce
         return loss.mean() # mean reduction
 
+
+class CrossEntropyAndDiceLoss(nn.Module):
+    def __init__(self, dice_weight=1.0, weight=None):
+        super().__init__()
+        self.dice_weight = dice_weight
+        if weight is not None:
+            self.register_buffer("weight", weight.detach().clone().float())
+        else:
+            self.register_buffer("weight", None)
+        self.cross_entropy = nn.CrossEntropyLoss(weight=weight)
+        self.dice = smp.losses.DiceLoss(mode="multiclass", from_logits=True, smooth=1e-6)
+
+    def forward(self, logits, target):
+        return self.cross_entropy(logits, target) + self.dice(logits, target) * self.dice_weight
 
 class SegmentationMapTrainer:
 
@@ -353,22 +367,19 @@ class SegmentationMapTrainer:
 
     def setup_criterion(self):
         criterion = self.args.criterion
+        weight = self.setup_loss_weights()
         # cross-entropy loss
         if criterion == "cross-entropy":
-            self.criterion = nn.CrossEntropyLoss().to(self.device)
-        # weighted cross-entropy loss
-        elif criterion == "weighted-cross-entropy":
-            weights = self.setup_loss_weights()
-            self.criterion = nn.CrossEntropyLoss(weight=weights).to(self.device)
+            self.criterion = nn.CrossEntropyLoss(weight=weight).to(self.device)
         # focal loss
         elif criterion == "focal-loss":
-            weights = self.setup_loss_weights()
             self.criterion = FocalLoss(
-                gamma=self.args.focal_gamma, weight=weights
+                gamma=self.args.focal_gamma, weight=weight
             ).to(self.device)
-        # dice loss
-        elif criterion == "dice-loss":
-            pass
+        # cross-entropy + dice loss
+        elif criterion == "cross-entropy-and-dice":
+            dice_weight = getattr(self.args, "dice_weight", 1.0)
+            self.criterion = CrossEntropyAndDiceLoss(dice_weight=dice_weight, weight=weight).to(self.device)
         else:
             raise ValueError(f"Invalid criterion: {criterion}")
 
@@ -533,6 +544,7 @@ if __name__ == "__main__":
         "criterion": "cross-entropy",
         "weights_method": "inverse_sqrt_frequency",
         "focal_gamma": 2.0,
+        "dice_weight": 1.0,
         "data_path": "data/cubicasa5k/",
         "n_epoch": 400,
         "batch_size": 26,
