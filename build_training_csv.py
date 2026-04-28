@@ -28,6 +28,7 @@ def read_existing_rows(csv_path: Path):
 
 def load_run_rows(runs_dir: Path, existing_folders):
     new_rows = []
+    new_keys = set()
 
     for run_dir in sorted(runs_dir.iterdir()):
         if not run_dir.is_dir():
@@ -53,22 +54,19 @@ def load_run_rows(runs_dir: Path, existing_folders):
         row["name"] = row.get("name", "") or ""
 
         new_rows.append(row)
+        new_keys.update(row.keys())
 
-    return new_rows
+    return new_rows, new_keys
 
 
-def build_fieldnames(existing_fieldnames, existing_rows, new_rows):
+def build_fieldnames(existing_fieldnames, existing_rows, new_rows, new_keys):
     required_first = ["folder_name", "name"]
 
-    # If training.csv already exists, keep exactly its existing header order.
-    if existing_fieldnames:
-        ordered_keys = []
-        for key in existing_fieldnames:
-            if key not in ordered_keys:
-                ordered_keys.append(key)
-        return ordered_keys
-
     ordered_keys = []
+    for key in existing_fieldnames:
+        if key not in ordered_keys:
+            ordered_keys.append(key)
+
     if not ordered_keys:
         seen = set(required_first)
         for row in existing_rows + new_rows:
@@ -76,6 +74,10 @@ def build_fieldnames(existing_fieldnames, existing_rows, new_rows):
                 if key in seen:
                     continue
                 seen.add(key)
+                ordered_keys.append(key)
+    else:
+        for key in new_keys:
+            if key not in ordered_keys and key not in required_first:
                 ordered_keys.append(key)
 
     for key in reversed(required_first):
@@ -98,10 +100,10 @@ def main():
         raise FileNotFoundError(f"Missing runs directory: {RUNS_DIR}")
 
     existing_rows, existing_folders, existing_fieldnames = read_existing_rows(OUTPUT_CSV)
-    new_rows = load_run_rows(RUNS_DIR, existing_folders)
+    new_rows, new_keys = load_run_rows(RUNS_DIR, existing_folders)
 
     all_rows = existing_rows + new_rows
-    fieldnames = build_fieldnames(existing_fieldnames, existing_rows, new_rows)
+    fieldnames = build_fieldnames(existing_fieldnames, existing_rows, new_rows, new_keys)
     all_rows = normalize_rows(all_rows, fieldnames)
 
     with OUTPUT_CSV.open("w", newline="", encoding="utf-8") as f:
