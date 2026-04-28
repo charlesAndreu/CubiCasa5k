@@ -37,6 +37,6 @@ plot_samples: true # log validation image/prediction samples to TensorBoard
 
 # DataLoader / augmentation flags
 debug: false # set true to force num_workers=0
-num_workers: 16
+num_workers: 20
 prefetch_factor: 4
-scale: false # enable resize-padded augmentation branch
+scale: true # enable resize-padded augmentation branch
