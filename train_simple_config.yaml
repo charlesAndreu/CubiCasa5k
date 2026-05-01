@@ -1,6 +1,9 @@
 # Segmentation target: room or icon
 segmentation_map: icon
 
+# Model architecture: unet_resnet34, unet_resnet50, unet_resnet152
+model: unet-resnet34
+
 # Optimizer strategy (choices):
 # - adam-patience: Adam + ReduceLROnPlateau on val loss
 # - adam-patience-previous-best: Adam + manual patience logic

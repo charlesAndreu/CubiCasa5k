@@ -45,7 +45,7 @@ class FocalLoss(nn.Module):
         ce = F.cross_entropy(logits, target, weight=self.weight, reduction="none")
         pt = torch.exp(-ce)
         loss = ((1.0 - pt) ** self.gamma) * ce
-        return loss.mean() # mean reduction
+        return loss.mean()  # mean reduction
 
 
 class CrossEntropyAndDiceLoss(nn.Module):
@@ -57,10 +57,16 @@ class CrossEntropyAndDiceLoss(nn.Module):
         else:
             self.register_buffer("weight", None)
         self.cross_entropy = nn.CrossEntropyLoss(weight=weight)
-        self.dice = smp.losses.DiceLoss(mode="multiclass", from_logits=True, smooth=1e-6)
+        self.dice = smp.losses.DiceLoss(
+            mode="multiclass", from_logits=True, smooth=1e-6
+        )
 
     def forward(self, logits, target):
-        return self.cross_entropy(logits, target) + self.dice(logits, target) * self.dice_weight
+        return (
+            self.cross_entropy(logits, target)
+            + self.dice(logits, target) * self.dice_weight
+        )
+
 
 class SegmentationMapTrainer:
 
@@ -143,13 +149,28 @@ class SegmentationMapTrainer:
 
     def model_setup(self):
         self.logger.info("Loading model...")
+        ## Unet models
+        if self.args.model.startswith("unet"):
+            self.logger.info(
+                f"Using {self.args.model} model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
+            )
+            self.model = smp.Unet(
+                encoder_name=self.args.model.split("-")[1],
+                encoder_weights="imagenet",
+                in_channels=3,
+                classes=self.n_output_channels,
+            )
+            self.logger.info(f"Unet model loaded")
+            return
+        else:
+            raise ValueError(f"Invalid model: {self.args.model}")
+        ## Original model (default)
         self.logger.info(
-            f"Using {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
+            f"Using furukawa model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
         )
-
         # load the original model with its 51 channels to be able to load the weights from the pre-trained model
         # however, we set n_heatmap_channels to 0 to avoid any sigmoid operation applied in conv4_ to these channels
-        model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
+        self.model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
         resume = bool(self.args.resume_from)
         if not resume:
             model.init_weights()
@@ -358,9 +379,7 @@ class SegmentationMapTrainer:
             return None
         with open("class_counts.json", "r") as f:
             class_counts = json.load(f)
-        counts = torch.tensor(
-            class_counts[self.segmentation_map], dtype=torch.float32
-        )
+        counts = torch.tensor(class_counts[self.segmentation_map], dtype=torch.float32)
         weights = Weights(counts).weights(method=self.args.weights_method)
         logger.info(f"Setting up loss weights: {weights}")
         return weights
@@ -373,13 +392,15 @@ class SegmentationMapTrainer:
             self.criterion = nn.CrossEntropyLoss(weight=weight).to(self.device)
         # focal loss
         elif criterion == "focal-loss":
-            self.criterion = FocalLoss(
-                gamma=self.args.focal_gamma, weight=weight
-            ).to(self.device)
+            self.criterion = FocalLoss(gamma=self.args.focal_gamma, weight=weight).to(
+                self.device
+            )
         # cross-entropy + dice loss
         elif criterion == "cross-entropy-and-dice":
             dice_weight = getattr(self.args, "dice_weight", 1.0)
-            self.criterion = CrossEntropyAndDiceLoss(dice_weight=dice_weight, weight=weight).to(self.device)
+            self.criterion = CrossEntropyAndDiceLoss(
+                dice_weight=dice_weight, weight=weight
+            ).to(self.device)
         else:
             raise ValueError(f"Invalid criterion: {criterion}")
 
@@ -437,8 +458,7 @@ class SegmentationMapTrainer:
             train_loss = float(np.mean(epoch_train_losses))
 
             self.logger.info(
-                "Epoch [%d/%d] Loss: %.4f"
-                % (epoch + 1, self.args.n_epoch, train_loss)
+                "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
             self.tensorboard_log_training_scalars(epoch, train_loss)
@@ -555,6 +575,7 @@ if __name__ == "__main__":
         "furukawa_weights": None,
         "resume_from": None,
         "log_path": "runs_cubi/",
+        "model": None,
         "debug": False,
         "num_workers": 16,
         "prefetch_factor": 4,
