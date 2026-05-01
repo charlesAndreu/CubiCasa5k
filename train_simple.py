@@ -129,7 +129,7 @@ class SegmentationMapTrainer:
 
         _dl_common = dict(
             num_workers=num_workers,
-            pin_memory=(self.device == "cuda"),
+            pin_memory=(self.device.type == "cuda"),
             persistent_workers=num_workers > 0,
         )
         if num_workers > 0:
@@ -159,7 +159,7 @@ class SegmentationMapTrainer:
                 encoder_weights="imagenet",
                 in_channels=3,
                 classes=self.n_output_channels,
-            )
+            ).to(self.device)
             self.logger.info(f"Unet model loaded")
             return
         else:
@@ -272,10 +272,10 @@ class SegmentationMapTrainer:
                 if i == 4:
                     break
                 images_val = samples_val["image"].to(
-                    self.device, non_blocking=(self.device == "cuda")
+                    self.device, non_blocking=(self.device.type == "cuda")
                 )
                 labels_val = samples_val["label"].to(
-                    self.device, non_blocking=(self.device == "cuda")
+                    self.device, non_blocking=(self.device.type == "cuda")
                 )
                 if first_best:
                     self.writer.add_image("Image " + str(i), images_val[0])
@@ -439,10 +439,10 @@ class SegmentationMapTrainer:
                 desc=f"Train ep {epoch + 1}/{self.args.n_epoch}",
             ):
                 images = samples["image"].to(
-                    self.device, non_blocking=(self.device == "cuda")
+                    self.device, non_blocking=(self.device.type == "cuda")
                 )
                 labels = samples["label"].to(
-                    self.device, non_blocking=(self.device == "cuda")
+                    self.device, non_blocking=(self.device.type == "cuda")
                 )
                 # outputs are logits: (N, n_output_channels, H, W)
                 outputs = self.model(images)
@@ -477,10 +477,10 @@ class SegmentationMapTrainer:
             ):
                 with torch.no_grad():
                     images_val = samples_val["image"].to(
-                        self.device, non_blocking=(self.device == "cuda")
+                        self.device, non_blocking=(self.device.type == "cuda")
                     )
                     labels_val = samples_val["label"].to(
-                        self.device, non_blocking=(self.device == "cuda")
+                        self.device, non_blocking=(self.device.type == "cuda")
                     )
 
                     outputs = self.model(images_val)
