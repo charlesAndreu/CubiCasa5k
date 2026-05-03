@@ -15,3 +15,8 @@ folder_name,name,segmentation_map,model,optimizer,criterion,data_path,n_epoch,ba
 2026-04-26-06:55:44,icon-ap-fl-noscale,icon,,adam-patience,focal-loss,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,16,4,True,False,,2.0,
 2026-04-28-17:30:54,icon-ap-ced-scale_INC,icon,,adam-patience,cross-entropy-and-dice,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0
 2026-04-28-21:21:10,icon-ap-ced-scale,icon,,adam-patience,cross-entropy-and-dice,data/cubicasa5k/,400,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0
+2026-04-29-06:54:49,icon-ap-ce-scale,icon,,adam-patience,cross-entropy,data/cubicasa5k/,400,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_double_sqrt_frequency,2.0,1.0
+2026-05-01-10:11:25,room-unet34-ce-scale,room,unet-resnet34,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0
+2026-05-01-10:13:24,room-unet34-ce-scale,room,unet-resnet34,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0
+2026-05-01-12:17:52,room-unet50-ce-scale,room,unet-resnet50,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0
+2026-05-01-15:27:46,room-unet152-ce-scale,room,unet-resnet152,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0

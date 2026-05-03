@@ -2,7 +2,7 @@
 segmentation_map: room
 
 # Model architecture: unet_resnet34, unet_resnet50, unet_resnet152
-model: unet-resnet34
+model: null
 
 # Optimizer strategy (choices):
 # - adam-patience: Adam + ReduceLROnPlateau on val loss
@@ -14,8 +14,8 @@ optimizer: adam-patience
 
 # Loss setup
 # criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss
-criterion: cross-entropy
-weights_method: inverse_sqrt_frequency # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
+criterion: cross-entropy-learned-weights
+weights_method: null # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
 focal_gamma: 2.0 # used when criterion = focal-loss
 dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
 

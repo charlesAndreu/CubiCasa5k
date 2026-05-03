@@ -32,6 +32,20 @@ from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
+class CrossEntropyLearnedWeightsLoss(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.s = nn.Parameter(torch.ones(num_classes))
+
+    def forward(self, logits, target):
+        # Per-class multipliers must not be passed as `weight=` to F.cross_entropy when they
+        # depend on parameters (PyTorch disallows grad through that argument); apply after CE.
+        ce = F.cross_entropy(logits, target, reduction="none")
+        w = torch.exp(-self.s)
+        wt = w[target]
+        return (ce * wt).mean() + 0.5 * self.s.mean()
+
+
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, weight=None):
         super().__init__()
@@ -150,27 +164,28 @@ class SegmentationMapTrainer:
     def model_setup(self):
         self.logger.info("Loading model...")
         ## Unet models
-        if self.args.model.startswith("unet"):
+        _m = self.args.model
+        if isinstance(_m, str) and _m.startswith("unet"):
             self.logger.info(
                 f"Using {self.args.model} model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
             )
-            self.model = smp.Unet(
-                encoder_name=self.args.model.split("-")[1],
+            model = smp.Unet(
+                encoder_name=_m.split("-")[1],
                 encoder_weights="imagenet",
                 in_channels=3,
                 classes=self.n_output_channels,
             ).to(self.device)
             self.logger.info(f"Unet model loaded")
-            return
+            return model
         else:
-            raise ValueError(f"Invalid model: {self.args.model}")
+            self.logger.info(f"No model specified, using furukawa model")
         ## Original model (default)
         self.logger.info(
             f"Using furukawa model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
         )
         # load the original model with its 51 channels to be able to load the weights from the pre-trained model
         # however, we set n_heatmap_channels to 0 to avoid any sigmoid operation applied in conv4_ to these channels
-        self.model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
+        model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
         resume = bool(self.args.resume_from)
         if not resume:
             model.init_weights()
@@ -200,14 +215,14 @@ class SegmentationMapTrainer:
 
         model.n_output_channels = self.n_output_channels
 
-        self.model = model.to(self.device)
-
         if resume:
             self.logger.info(
                 "Resuming model weights from checkpoint '%s'", self.args.resume_from
             )
             checkpoint = torch.load(self.args.resume_from, map_location=self.device)
-            self.model.load_state_dict(checkpoint["model_state"])
+            model.load_state_dict(checkpoint["model_state"])
+
+        return model.to(self.device)
 
     def draw_tensorboard_graph(self):
         if self.writer is None:
@@ -311,9 +326,10 @@ class SegmentationMapTrainer:
                 )
 
     def setup_optimizer(self):
+        opt_params = self._optimizer_parameters()
         if self.args.optimizer == "adam-patience":
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
+                opt_params,
                 lr=self.args.l_rate,
                 eps=1e-8,
                 betas=(0.9, 0.999),
@@ -323,7 +339,7 @@ class SegmentationMapTrainer:
             )
         elif self.args.optimizer == "adam-patience-previous-best":
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
+                opt_params,
                 lr=self.args.l_rate,
                 eps=1e-8,
                 betas=(0.9, 0.999),
@@ -335,7 +351,7 @@ class SegmentationMapTrainer:
                 return (1 - epoch / self.args.n_epoch) ** 0.9
 
             self.optimizer = torch.optim.SGD(
-                self.model.parameters(),
+                opt_params,
                 lr=self.args.l_rate,
                 momentum=0.9,
                 weight_decay=10**-4,
@@ -350,7 +366,7 @@ class SegmentationMapTrainer:
                 return 0.5 ** np.floor(epoch / self.args.l_rate_drop)
 
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
+                opt_params,
                 lr=self.args.l_rate,
                 eps=1e-8,
                 betas=(0.9, 0.999),
@@ -360,6 +376,12 @@ class SegmentationMapTrainer:
             )
         else:
             raise ValueError(f"Invalid optimizer: {self.args.optimizer}")
+
+    def _optimizer_parameters(self):
+        """Model weights plus any trainable parameters on the criterion (e.g. learned class weights)."""
+        params = list(self.model.parameters())
+        params.extend(self.criterion.parameters())
+        return params
 
     def save_checkpoint(self, filename, epoch, best_loss=None):
         """Save training checkpoint under log_dir. filename is a basename (e.g. 'model_last_epoch.pkl')."""
@@ -401,6 +423,10 @@ class SegmentationMapTrainer:
             self.criterion = CrossEntropyAndDiceLoss(
                 dice_weight=dice_weight, weight=weight
             ).to(self.device)
+        elif criterion == "cross-entropy-learned-weights":
+            self.criterion = CrossEntropyLearnedWeightsLoss(self.n_output_channels).to(
+                self.device
+            )
         else:
             raise ValueError(f"Invalid criterion: {criterion}")
 
@@ -412,10 +438,10 @@ class SegmentationMapTrainer:
         self.tensorboard_log_args()
         self.logger.info("Using device: %s", self.device)
         trainloader, valloader = self.data_loader()
-        self.model_setup()
+        self.model = self.model_setup()
         self.draw_tensorboard_graph()
-        self.setup_optimizer()
         self.setup_criterion()
+        self.setup_optimizer()
 
         first_best = True
         best_val_loss = np.inf
@@ -534,6 +560,12 @@ class SegmentationMapTrainer:
             if val_loss_mean < best_val_loss:
                 best_val_loss = val_loss_mean
                 self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
+                if isinstance(self.criterion, CrossEntropyLearnedWeightsLoss):
+                    w = np.exp(-self.criterion.s.detach().cpu().numpy()).reshape(-1)
+                    self.logger.info(
+                        "Learned per-class weights: [%s]",
+                        ", ".join(f"{float(x):.4f}" for x in w),
+                    )
                 self.save_checkpoint(
                     "model_best_val_loss.pkl",
                     epoch + 1,
