@@ -1,85 +1,22 @@
-import matplotlib.pyplot as plt
-import matplotlib
-
-matplotlib.use("pdf")
 import sys
 import os
 import logging
 import json
-import math
-import lmdb
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import yaml  # type: ignore[reportMissingModuleSource]
-from class_counts import Weights
 from datetime import datetime
 from types import SimpleNamespace
-from torch.utils import data
 from tqdm import tqdm
-import segmentation_models_pytorch as smp
-from floortrans.loaders.room_icon_loaders import (
-    RoomLoader,
-    IconLoader,
-    build_simple_train_augmentations,
-    build_simple_val_augmentations,
-)
-from floortrans.models import hg_furukawa_original
 from floortrans.metrics import runningScore
-
+from model import cubi_casa5k_model
 from tensorboardX import SummaryWriter
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-
-class CrossEntropyLearnedWeightsLoss(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.s = nn.Parameter(torch.ones(num_classes))
-
-    def forward(self, logits, target):
-        # Per-class multipliers must not be passed as `weight=` to F.cross_entropy when they
-        # depend on parameters (PyTorch disallows grad through that argument); apply after CE.
-        ce = F.cross_entropy(logits, target, reduction="none")
-        w = torch.exp(-self.s)
-        wt = w[target]
-        return (ce * wt).mean() + 0.5 * self.s.mean()
-
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, weight=None):
-        super().__init__()
-        self.gamma = float(gamma)
-        if weight is not None:
-            self.register_buffer("weight", weight.detach().clone().float())
-        else:
-            self.register_buffer("weight", None)
-
-    def forward(self, logits, target):
-        ce = F.cross_entropy(logits, target, weight=self.weight, reduction="none")
-        pt = torch.exp(-ce)
-        loss = ((1.0 - pt) ** self.gamma) * ce
-        return loss.mean()  # mean reduction
-
-
-class CrossEntropyAndDiceLoss(nn.Module):
-    def __init__(self, dice_weight=1.0, weight=None):
-        super().__init__()
-        self.dice_weight = dice_weight
-        if weight is not None:
-            self.register_buffer("weight", weight.detach().clone().float())
-        else:
-            self.register_buffer("weight", None)
-        self.cross_entropy = nn.CrossEntropyLoss(weight=weight)
-        self.dice = smp.losses.DiceLoss(
-            mode="multiclass", from_logits=True, smooth=1e-6
-        )
-
-    def forward(self, logits, target):
-        return (
-            self.cross_entropy(logits, target)
-            + self.dice(logits, target) * self.dice_weight
-        )
+from criterion import CrossEntropyLearnedWeightsLoss, build_criterion
+from dataloader import build_cubi_casa5k_dataloaders
+from optimizer import build_optimizer_and_scheduler
+from tensorboard import TrainingTensorBoard
 
 
 class SegmentationMapTrainer:
@@ -88,7 +25,7 @@ class SegmentationMapTrainer:
         self.segmentation_map = args.segmentation_map
         self.args = args
         self.log_dir = log_dir
-        self.writer = writer  # None when TensorBoard is disabled
+        self.tb = TrainingTensorBoard(writer)
         self.logger = logger
         self.n_output_channels = 12 if self.segmentation_map == "room" else 11
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -105,283 +42,27 @@ class SegmentationMapTrainer:
             t = F.interpolate(t, size=output_hw, mode="nearest")
         return t.squeeze(1).long()
 
-    def data_loader(self):
-        self.logger.info("Loading data...")
-        root = self.args.data_path.rstrip(os.sep)
-        lmdb_path = os.path.join(root, "cubi_lmdb")
-        lmdb_env = lmdb.open(
-            lmdb_path,
-            readonly=True,
-            max_readers=16,
-            lock=False,
-            readahead=True,
-            meminit=False,
+    def dataloader_setup(self):
+        return build_cubi_casa5k_dataloaders(
+            self.args, self.segmentation_map, self.device, self.logger
         )
-
-        self.logger.info(
-            "LMDB loader is %sLoader",
-            "Room" if self.segmentation_map == "room" else "Icon",
-        )
-        train_aug = build_simple_train_augmentations(self.args)
-        val_aug = build_simple_val_augmentations(self.args)
-        LoaderCls = RoomLoader if self.segmentation_map == "room" else IconLoader
-        train_set = LoaderCls(self.args.data_path, "train.txt", lmdb_env, train_aug)
-        val_set = LoaderCls(self.args.data_path, "val.txt", lmdb_env, val_aug)
-
-        if self.args.debug:
-            num_workers = 0
-            print("In debug mode.")
-            self.logger.info("In debug mode.")
-        else:
-            num_workers = max(0, self.args.num_workers)
-
-        self.logger.info(
-            "DataLoader num_workers=%s prefetch_factor=%s",
-            num_workers,
-            max(2, int(self.args.prefetch_factor)) if num_workers > 0 else "n/a",
-        )
-
-        _dl_common = dict(
-            num_workers=num_workers,
-            pin_memory=(self.device.type == "cuda"),
-            persistent_workers=num_workers > 0,
-        )
-        if num_workers > 0:
-            _dl_common["prefetch_factor"] = max(2, int(self.args.prefetch_factor))
-        trainloader = data.DataLoader(
-            train_set,
-            batch_size=self.args.batch_size,
-            shuffle=True,
-            **_dl_common,
-        )
-        valloader = data.DataLoader(
-            val_set,
-            batch_size=1,
-            **_dl_common,
-        )
-        return trainloader, valloader
 
     def model_setup(self):
-        self.logger.info("Loading model...")
-        ## Unet models
-        _m = self.args.model
-        if isinstance(_m, str) and _m.startswith("unet"):
-            self.logger.info(
-                f"Using {self.args.model} model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
-            )
-            model = smp.Unet(
-                encoder_name=_m.split("-")[1],
-                encoder_weights="imagenet",
-                in_channels=3,
-                classes=self.n_output_channels,
-            ).to(self.device)
-            self.logger.info(f"Unet model loaded")
-            return model
-        else:
-            self.logger.info(f"No model specified, using furukawa model")
-        ## Original model (default)
-        self.logger.info(
-            f"Using furukawa model with {self.n_output_channels} channels for {self.segmentation_map} segmentation map"
+        return cubi_casa5k_model(self.args, self.logger)
+
+    def criterion_setup(self):
+        return build_criterion(
+            self.args,
+            self.segmentation_map,
+            self.n_output_channels,
+            self.device,
+            self.logger,
         )
-        # load the original model with its 51 channels to be able to load the weights from the pre-trained model
-        # however, we set n_heatmap_channels to 0 to avoid any sigmoid operation applied in conv4_ to these channels
-        model = hg_furukawa_original(n_heatmap_channels=0, n_output_channels=51)
-        resume = bool(self.args.resume_from)
-        if not resume:
-            model.init_weights()
-            if self.args.furukawa_weights:
-                self.logger.info(
-                    "Loading furukawa model weights from checkpoint '{}'".format(
-                        self.args.furukawa_weights
-                    )
-                )
-                checkpoint = torch.load(self.args.furukawa_weights)
-                model.load_state_dict(checkpoint["model_state"])
-        else:
-            self.logger.info(
-                "Skipping init_weights / --furukawa-weights; will load full state from --resume-from"
-            )
-        # replace the last conv layer with a 1x1 conv layer to output the desired number of channels
-        model.conv4_ = torch.nn.Conv2d(
-            256, self.n_output_channels, bias=True, kernel_size=1
+
+    def optimizer_setup(self):
+        return build_optimizer_and_scheduler(
+            self.args, self.model, self.criterion
         )
-        model.upsample = torch.nn.ConvTranspose2d(
-            self.n_output_channels, self.n_output_channels, kernel_size=4, stride=4
-        )
-        if not resume:
-            for m in [model.conv4_, model.upsample]:
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                nn.init.constant_(m.bias, 0)
-
-        model.n_output_channels = self.n_output_channels
-
-        if resume:
-            self.logger.info(
-                "Resuming model weights from checkpoint '%s'", self.args.resume_from
-            )
-            checkpoint = torch.load(self.args.resume_from, map_location=self.device)
-            model.load_state_dict(checkpoint["model_state"])
-
-        return model.to(self.device)
-
-    def draw_tensorboard_graph(self):
-        if self.writer is None:
-            return
-        dummy = torch.zeros(
-            (2, 3, self.args.image_size, self.args.image_size),
-            device=self.device,
-        )
-        self.writer.add_graph(self.model, dummy)
-
-    def tensorboard_log_args(self):
-        if self.writer is None:
-            return
-        self.writer.add_text("parameters", str(vars(self.args)))
-
-    @staticmethod
-    def _tb_finite_float(x):
-        """Plain float for TensorBoard; None if NaN/Inf (metrics often NaN per-class on small val sets)."""
-        v = float(np.asarray(x).reshape(-1)[0])
-        if not math.isfinite(v):
-            return None
-        return v
-
-    def _log_tb_scalar(self, tag, value, step):
-        if self.writer is None:
-            return
-        v = self._tb_finite_float(value)
-        if v is not None:
-            self.writer.add_scalar(tag, v, global_step=step)
-
-    def tensorboard_log_training_scalars(self, epoch, train_loss):
-        if self.writer is None:
-            return
-        step = 1 + epoch
-        lr = self.optimizer.param_groups[0]["lr"]
-        self._log_tb_scalar("training/loss", train_loss, step)
-        self._log_tb_scalar("training/lr", lr, step)
-
-    def tensorboard_log_validation_loss(self, epoch, val_loss_mean):
-        self._log_tb_scalar("validation/loss", val_loss_mean, 1 + epoch)
-
-    def tensorboard_log_validation_map_metrics(self, epoch, score, class_iou):
-        if self.writer is None:
-            return
-        step = 1 + epoch
-        for name, val in score.items():
-            tag = "validation/map/general/" + name.replace(" ", "_")
-            self._log_tb_scalar(tag, val, step)
-        for cls, val in class_iou["Class IoU"].items():
-            self._log_tb_scalar("validation/map/class_iou/" + str(cls), val, step)
-        for cls, val in class_iou["Class Acc"].items():
-            self._log_tb_scalar("validation/map/class_acc/" + str(cls), val, step)
-        self.writer.flush()
-
-    def tensorboard_log_new_best_val_visualizations(self, epoch, valloader, first_best):
-        if self.writer is None or not self.args.plot_samples:
-            return
-
-        self.model.eval()
-        for i, samples_val in enumerate(valloader):
-            with torch.no_grad():
-                if i == 4:
-                    break
-                images_val = samples_val["image"].to(
-                    self.device, non_blocking=(self.device.type == "cuda")
-                )
-                labels_val = samples_val["label"].to(
-                    self.device, non_blocking=(self.device.type == "cuda")
-                )
-                if first_best:
-                    self.writer.add_image("Image " + str(i), images_val[0])
-                    gt = labels_val[0, 0].detach().cpu().numpy()
-                    fig = plt.figure(figsize=(10, 8))
-                    plot = fig.add_subplot(111)
-                    cax = plot.imshow(
-                        gt,
-                        vmin=0,
-                        vmax=self.n_output_channels - 1,
-                        cmap=plt.cm.tab20,
-                    )
-                    fig.colorbar(cax)
-                    self.writer.add_figure(
-                        "Image " + str(i) + " label/" + self.segmentation_map,
-                        fig,
-                    )
-                outputs = self.model(images_val)
-                pred_map = outputs[0].argmax(dim=0).detach().cpu().numpy()
-                fig = plt.figure(figsize=(18, 12))
-                plot = fig.add_subplot(111)
-                cax = plot.imshow(
-                    pred_map,
-                    vmin=0,
-                    vmax=self.n_output_channels - 1,
-                    cmap=plt.cm.tab20,
-                )
-                fig.colorbar(cax)
-                self.writer.add_figure(
-                    "Image " + str(i) + " prediction/" + self.segmentation_map,
-                    fig,
-                    global_step=1 + epoch,
-                )
-
-    def setup_optimizer(self):
-        opt_params = self._optimizer_parameters()
-        if self.args.optimizer == "adam-patience":
-            self.optimizer = torch.optim.Adam(
-                opt_params,
-                lr=self.args.l_rate,
-                eps=1e-8,
-                betas=(0.9, 0.999),
-            )
-            self.scheduler = ReduceLROnPlateau(
-                self.optimizer, "min", patience=self.args.patience, factor=0.5
-            )
-        elif self.args.optimizer == "adam-patience-previous-best":
-            self.optimizer = torch.optim.Adam(
-                opt_params,
-                lr=self.args.l_rate,
-                eps=1e-8,
-                betas=(0.9, 0.999),
-            )
-            self.scheduler = None
-        elif self.args.optimizer == "sgd":
-
-            def lr_drop(epoch):
-                return (1 - epoch / self.args.n_epoch) ** 0.9
-
-            self.optimizer = torch.optim.SGD(
-                opt_params,
-                lr=self.args.l_rate,
-                momentum=0.9,
-                weight_decay=10**-4,
-                nesterov=True,
-            )
-            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-                self.optimizer, lr_lambda=lr_drop
-            )
-        elif self.args.optimizer == "adam-scheduler":
-
-            def lr_drop(epoch):
-                return 0.5 ** np.floor(epoch / self.args.l_rate_drop)
-
-            self.optimizer = torch.optim.Adam(
-                opt_params,
-                lr=self.args.l_rate,
-                eps=1e-8,
-                betas=(0.9, 0.999),
-            )
-            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-                self.optimizer, lr_lambda=lr_drop
-            )
-        else:
-            raise ValueError(f"Invalid optimizer: {self.args.optimizer}")
-
-    def _optimizer_parameters(self):
-        """Model weights plus any trainable parameters on the criterion (e.g. learned class weights)."""
-        params = list(self.model.parameters())
-        params.extend(self.criterion.parameters())
-        return params
 
     def save_checkpoint(self, filename, epoch, best_loss=None):
         """Save training checkpoint under log_dir. filename is a basename (e.g. 'model_last_epoch.pkl')."""
@@ -396,53 +77,28 @@ class SegmentationMapTrainer:
         path = os.path.join(self.log_dir, filename)
         torch.save(state, path)
 
-    def setup_loss_weights(self):
-        if not self.args.weights_method:
-            return None
-        with open("class_counts.json", "r") as f:
-            class_counts = json.load(f)
-        counts = torch.tensor(class_counts[self.segmentation_map], dtype=torch.float32)
-        weights = Weights(counts).weights(method=self.args.weights_method)
-        logger.info(f"Setting up loss weights: {weights}")
-        return weights
-
-    def setup_criterion(self):
-        criterion = self.args.criterion
-        weight = self.setup_loss_weights()
-        # cross-entropy loss
-        if criterion == "cross-entropy":
-            self.criterion = nn.CrossEntropyLoss(weight=weight).to(self.device)
-        # focal loss
-        elif criterion == "focal-loss":
-            self.criterion = FocalLoss(gamma=self.args.focal_gamma, weight=weight).to(
-                self.device
-            )
-        # cross-entropy + dice loss
-        elif criterion == "cross-entropy-and-dice":
-            dice_weight = getattr(self.args, "dice_weight", 1.0)
-            self.criterion = CrossEntropyAndDiceLoss(
-                dice_weight=dice_weight, weight=weight
-            ).to(self.device)
-        elif criterion == "cross-entropy-learned-weights":
-            self.criterion = CrossEntropyLearnedWeightsLoss(self.n_output_channels).to(
-                self.device
-            )
-        else:
-            raise ValueError(f"Invalid criterion: {criterion}")
-
     def train(self):
+        # ------------------------------------------------------------
+        # Setup
+        # ------------------------------------------------------------
 
         with open(self.log_dir + "/args.json", "w") as out:
             json.dump(vars(self.args), out, indent=4)
-
-        self.tensorboard_log_args()
         self.logger.info("Using device: %s", self.device)
-        trainloader, valloader = self.data_loader()
-        self.model = self.model_setup()
-        self.draw_tensorboard_graph()
-        self.setup_criterion()
-        self.setup_optimizer()
 
+        trainloader, valloader = self.dataloader_setup()
+        self.model = self.model_setup()
+        self.criterion = self.criterion_setup()
+        self.optimizer, self.scheduler = self.optimizer_setup()
+
+        self.tb.log_args(self.args)
+        self.tb.add_graph(self.model, self.args.image_size, self.device)
+
+        # ------------------------------------------------------------
+        # Training
+        # ------------------------------------------------------------
+
+        # set up variables for training
         first_best = True
         best_val_loss = np.inf
         start_epoch = 0
@@ -450,12 +106,12 @@ class SegmentationMapTrainer:
         best_val_loss_variance = np.inf
         no_improvement = 0
 
-        # train for n_epochs
+        # train for n_epochs (self.args.n_epoch)
         for epoch in range(start_epoch, self.args.n_epoch):
             self.model.train()
             epoch_train_losses = []
             # ------------------------------------------------------------
-            # Training
+            # epoch training
             # ------------------------------------------------------------
             for i, samples in tqdm(
                 enumerate(trainloader),
@@ -487,10 +143,10 @@ class SegmentationMapTrainer:
                 "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
             )
 
-            self.tensorboard_log_training_scalars(epoch, train_loss)
+            self.tb.log_training_scalars(epoch, train_loss, self.optimizer)
 
             # ------------------------------------------------------------
-            # Validation
+            # epoch validation
             # ------------------------------------------------------------
             self.model.eval()
             val_losses = []
@@ -523,9 +179,11 @@ class SegmentationMapTrainer:
 
             val_loss_mean = float(np.mean(val_losses))
             self.logger.info("val_loss: %.4f" % val_loss_mean)
-            self.tensorboard_log_validation_loss(epoch, val_loss_mean)
+            self.tb.log_validation_loss(epoch, val_loss_mean)
 
+            # ------------------------------------------------------------
             # Learning rate scheduler
+            # ------------------------------------------------------------
             # adam-patience: reduce learning rate when validation loss plateaus
             if self.args.optimizer == "adam-patience":
                 self.scheduler.step(val_loss_mean)
@@ -554,9 +212,12 @@ class SegmentationMapTrainer:
                 self.scheduler.step(epoch + 1)
 
             score, class_iou = running_metrics_map_val.get_scores()
-            self.tensorboard_log_validation_map_metrics(epoch, score, class_iou)
+            self.tb.log_validation_map_metrics(epoch, score, class_iou)
             running_metrics_map_val.reset()
 
+            # ------------------------------------------------------------
+            # Save best validation model
+            # ------------------------------------------------------------
             if val_loss_mean < best_val_loss:
                 best_val_loss = val_loss_mean
                 self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
@@ -571,16 +232,25 @@ class SegmentationMapTrainer:
                     epoch + 1,
                     best_loss=best_val_loss,
                 )
-                self.tensorboard_log_new_best_val_visualizations(
-                    epoch, valloader, first_best
+                self.tb.log_new_best_val_visualizations(
+                    epoch,
+                    valloader,
+                    first_best,
+                    self.model,
+                    self.args,
+                    self.segmentation_map,
+                    self.n_output_channels,
+                    self.device,
                 )
 
                 first_best = False
 
+        # ------------------------------------------------------------
+        # Save final model
+        # ------------------------------------------------------------
         self.logger.info("Last epoch done saving final model...")
         self.save_checkpoint("model_last_epoch.pkl", epoch + 1)
-        if self.writer is not None:
-            self.writer.close()
+        self.tb.close()
 
 
 if __name__ == "__main__":
