@@ -1,5 +1,5 @@
 # Segmentation target: room or icon
-segmentation_map: room
+segmentation_map: icon
 
 # Model architecture: unet_resnet34, unet_resnet50, unet_resnet152
 model: null

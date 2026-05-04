@@ -16,7 +16,7 @@ from tensorboardX import SummaryWriter
 from criterion import CrossEntropyLearnedWeightsLoss, build_criterion
 from dataloader import build_cubi_casa5k_dataloaders
 from optimizer import build_optimizer_and_scheduler
-from tensorboard import TrainingTensorBoard
+from training_tensorboard import TrainingTensorBoard
 
 
 class SegmentationMapTrainer:
@@ -222,9 +222,15 @@ class SegmentationMapTrainer:
                 best_val_loss = val_loss_mean
                 self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
                 if isinstance(self.criterion, CrossEntropyLearnedWeightsLoss):
-                    w = np.exp(-self.criterion.s.detach().cpu().numpy()).reshape(-1)
+                    w = (
+                        self.criterion.normalized_class_weights()
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .reshape(-1)
+                    )
                     self.logger.info(
-                        "Learned per-class weights: [%s]",
+                        "Learned per-class weights (mean-normalized): [%s]",
                         ", ".join(f"{float(x):.4f}" for x in w),
                     )
                 self.save_checkpoint(

@@ -41,13 +41,26 @@ class CrossEntropyLearnedWeightsLoss(nn.Module):
         super().__init__()
         self.s = nn.Parameter(torch.ones(num_classes))
 
+    # def forward(self, logits, target):
+    #     ce = F.cross_entropy(logits, target, reduction="none")
+    #     w = torch.exp(-self.s)
+    #     wt = w[target]
+    #     return (ce * wt).mean() + 0.5 * self.s.mean()
+
+    def normalized_class_weights(self):
+        """``w = exp(-s)`` with mean 1 over classes (used in ``forward``)."""
+        w_raw = torch.exp(-self.s)
+        return w_raw / (w_raw.mean() + 1e-8)
+
     def forward(self, logits, target):
         # Per-class multipliers must not be passed as `weight=` to F.cross_entropy when they
         # depend on parameters (PyTorch disallows grad through that argument); apply after CE.
         ce = F.cross_entropy(logits, target, reduction="none")
-        w = torch.exp(-self.s)
+        w = self.normalized_class_weights()
         wt = w[target]
-        return (ce * wt).mean() + 0.5 * self.s.mean()
+        # Mean-normalized w: regularize spread of s (not s.mean(); see legacy block above).
+        reg = -0.5 * torch.log(w + 1e-8).mean()
+        return (ce * wt).mean() + reg
 
 
 class FocalLoss(nn.Module):
