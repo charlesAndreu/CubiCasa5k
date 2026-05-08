@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import csv
 import fnmatch
+import re
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -392,6 +393,14 @@ class TrainingPlotHelper:
     def _display_scalar_name(name: str) -> str:
         return name.replace("/", "-")
 
+    @staticmethod
+    def _slugify_title(title: str) -> str:
+        slug = title.strip().lower()
+        slug = re.sub(r"\s+", "-", slug)
+        slug = re.sub(r"[^a-z0-9._-]", "-", slug)
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")
+        return slug
+
     def load_selected(self, silent_no_selection: bool = False) -> None:
         self._load_after_id = None
         rows = self._selected_rows()
@@ -612,17 +621,28 @@ class TrainingPlotHelper:
         )
 
     def save_plot(self) -> None:
-        filename = self.image_name_var.get().strip()
+        title = self.title_var.get().strip()
+        filename = self._slugify_title(title)
         if not filename:
-            messagebox.showwarning(
-                "Missing name", "Enter an image filename (example: plot.png)."
-            )
-            return
+            filename = self._slugify_title(self.ax.get_title())
+        if not filename:
+            filename = "plot"
         if "." not in filename:
             filename += ".png"
 
+        # Keep the UI field in sync with the auto-generated filename.
+        self.image_name_var.set(filename)
+
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
         out_path = IMAGES_DIR / filename
+        if out_path.exists():
+            confirm = messagebox.askyesno(
+                "Overwrite existing file?",
+                f"File already exists:\n{out_path}\n\nOverwrite it?",
+            )
+            if not confirm:
+                self.status_var.set(f"Save cancelled: {out_path}")
+                return
         self.fig.savefig(out_path, bbox_inches="tight", dpi=140)
         self.status_var.set(f"Saved: {out_path}")
         messagebox.showinfo("Saved", f"Image saved to:\n{out_path}")
