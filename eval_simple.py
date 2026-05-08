@@ -4,6 +4,8 @@ import sys
 import logging
 from types import SimpleNamespace
 
+import matplotlib
+import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml  # type: ignore[reportMissingModuleSource]
@@ -12,6 +14,9 @@ from tqdm import tqdm
 from dataloader import build_cubi_casa5k_eval_dataloaders
 from floortrans.metrics import runningScore
 from model import cubi_casa5k_model
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 class SegmentationMapEvaluator:
@@ -84,7 +89,8 @@ class SegmentationMapEvaluator:
                 running_metrics_map_val.update([map_gt], [map_pred])
 
         score, class_iou = running_metrics_map_val.get_scores()
-        return score, class_iou
+        confusion_matrix = running_metrics_map_val.confusion_matrix.copy()
+        return score, class_iou, confusion_matrix
 
 
 def load_eval_args(run_dir):
@@ -133,6 +139,61 @@ def _to_jsonable(value):
     return value
 
 
+def save_confusion_matrix_artifacts(run_dir, confusion_matrix):
+    row_sums = confusion_matrix.sum(axis=1, keepdims=True)
+    normalized = np.divide(
+        confusion_matrix,
+        row_sums,
+        out=np.zeros_like(confusion_matrix, dtype=float),
+        where=row_sums != 0,
+    )
+
+    n_classes = confusion_matrix.shape[0]
+    labels = [str(i) for i in range(n_classes)]
+
+    fig_size = max(8, min(16, n_classes * 0.8))
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+    im = ax.imshow(normalized, interpolation="nearest", cmap="Blues", vmin=0.0, vmax=1.0)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Row-normalized score")
+
+    ax.set(
+        xticks=np.arange(n_classes),
+        yticks=np.arange(n_classes),
+        xticklabels=labels,
+        yticklabels=labels,
+        xlabel="Predicted class",
+        ylabel="True class",
+        title="Confusion Matrix (row-normalized colors)",
+    )
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    for i in range(n_classes):
+        for j in range(n_classes):
+            count = int(confusion_matrix[i, j])
+            pct = normalized[i, j] * 100.0
+            text_color = "white" if normalized[i, j] > 0.5 else "black"
+            ax.text(
+                j,
+                i,
+                f"{count}\n{pct:.1f}%",
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=8,
+            )
+
+    fig.tight_layout()
+    image_path = os.path.join(run_dir, "confusion_matrix.png")
+    fig.savefig(image_path, dpi=200)
+    plt.close(fig)
+
+    raw_path = os.path.join(run_dir, "confusion_matrix_raw.json")
+    with open(raw_path, "w") as f:
+        json.dump({"confusion_matrix": confusion_matrix.tolist()}, f, indent=2)
+
+    return image_path, raw_path
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise ValueError("Usage: python eval_simple.py <run_dir>")
@@ -140,10 +201,15 @@ if __name__ == "__main__":
     args = load_eval_args(run_dir)
 
     evaluator = SegmentationMapEvaluator(args)
-    score, class_iou = evaluator.evaluate()
+    score, class_iou, confusion_matrix = evaluator.evaluate()
+    confusion_image_path, confusion_raw_path = save_confusion_matrix_artifacts(
+        run_dir, confusion_matrix
+    )
     results = {
         "score": _to_jsonable(score),
         "class_iou": _to_jsonable(class_iou),
+        "confusion_matrix_image": os.path.basename(confusion_image_path),
+        "confusion_matrix_raw": os.path.basename(confusion_raw_path),
     }
 
     output_path = os.path.join(run_dir, "eval.json")
@@ -151,3 +217,5 @@ if __name__ == "__main__":
         json.dump(results, f, indent=2)
 
     print(f"Saved evaluation results to {output_path}")
+    print(f"Saved confusion matrix image to {confusion_image_path}")
+    print(f"Saved confusion matrix raw values to {confusion_raw_path}")
