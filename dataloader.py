@@ -68,3 +68,36 @@ def build_cubi_casa5k_dataloaders(args, segmentation_map, device, logger):
         **dl_common,
     )
     return trainloader, valloader
+
+
+def build_cubi_casa5k_eval_dataloaders(args, segmentation_map, device):
+    """Open LMDB, build test dataset and PyTorch ``DataLoader``s."""
+    root = args.data_path.rstrip(os.sep)
+    lmdb_path = os.path.join(root, "cubi_lmdb")
+    lmdb_env = lmdb.open(
+        lmdb_path,
+        readonly=True,
+        max_readers=16,
+        lock=False,
+        readahead=True,
+        meminit=False,
+    )
+
+    print(
+        f"LMDB eval loader is {'Room' if segmentation_map == 'room' else 'Icon'}Loader"
+    )
+    LoaderCls = RoomLoader if segmentation_map == "room" else IconLoader
+    test_set = LoaderCls(args.data_path, "test.txt", lmdb_env, None)
+
+    num_workers = max(0, args.num_workers)
+    persistent_workers = num_workers > 0
+    pin_memory = device.type == "cuda"
+
+    return DataLoader(
+        test_set,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
