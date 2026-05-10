@@ -36,6 +36,7 @@ TRAIN_SIMPLE_CONFIG_DEFAULTS = {
     "resume_from": None,
     "log_path": "runs_cubi/",
     "model": None,
+    "segformer_model_name": "nvidia/segformer-b0-finetuned-ade-512-512",
     "debug": False,
     "num_workers": 16,
     "prefetch_factor": 4,
@@ -120,7 +121,6 @@ class SegmentationMapTrainer:
         self.optimizer, self.scheduler = self.optimizer_setup()
 
         self.tb.log_args(self.args)
-        self.tb.add_graph(self.model, self.args.image_size, self.device)
 
         # ------------------------------------------------------------
         # Training
@@ -180,8 +180,8 @@ class SegmentationMapTrainer:
             self.model.eval()
             val_losses = []
             val_len = len(valloader)
-            for i_val, samples_val in tqdm(
-                enumerate(valloader),
+            for samples_val in tqdm(
+                valloader,
                 total=val_len,
                 ncols=80,
                 leave=False,

@@ -21,5 +21,6 @@ PyYAML>=6.0
 tensorboard>=2.16
 tensorboardX>=2.6
 segmentation-models-pytorch
+transformers>=4.40
 
 flask>=3.0

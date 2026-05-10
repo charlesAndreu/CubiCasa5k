@@ -29,12 +29,6 @@ class TrainingTensorBoard:
             return
         self.writer.add_text("parameters", str(vars(args)))
 
-    def add_graph(self, model, image_size, device):
-        if self.writer is None:
-            return
-        dummy = torch.zeros((2, 3, image_size, image_size), device=device)
-        self.writer.add_graph(model, dummy)
-
     def _log_scalar(self, tag, value, step):
         if self.writer is None:
             return

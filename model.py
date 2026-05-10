@@ -1,9 +1,12 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import segmentation_models_pytorch as smp
 from floortrans.models import hg_furukawa_original
 
 from dataloader import n_segmentation_classes
+from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+
 
 
 class CubiCasa5KUnet(smp.Unet):
@@ -76,8 +79,67 @@ class CubiCasa5KFurukawa(hg_furukawa_original):
         self.to(device)
 
 
+class CubiCasa5KSegFormer(nn.Module):
+
+    def __init__(self, args, logger):
+        super().__init__()
+        model_name = getattr(
+            args,
+            "segformer_model_name",
+            "nvidia/segformer-b0-finetuned-ade-512-512",
+        )
+        segmentation_map = args.segmentation_map
+        n_labels = 12 if segmentation_map == "room" else 11
+
+        logger.info(
+            "Loading SegFormer %s with num_labels=%d (%s)",
+            model_name,
+            n_labels,
+            segmentation_map,
+        )
+
+        self.processor = SegformerImageProcessor.from_pretrained(model_name)
+        self.segformer = SegformerForSemanticSegmentation.from_pretrained(
+            model_name,
+            num_labels=n_labels,
+            ignore_mismatched_sizes=True,
+        )
+
+        mean = torch.tensor(self.processor.image_mean, dtype=torch.float32).view(
+            1, 3, 1, 1
+        )
+        std = torch.tensor(self.processor.image_std, dtype=torch.float32).view(
+            1, 3, 1, 1
+        )
+        self.register_buffer("_mean", mean)
+        self.register_buffer("_std", std)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(device)
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        # ``images``: (N, 3, H, W), [-1, 1] from cubicasa augmentations
+        x01 = (images + 1.0) * 0.5
+        x01 = x01.clamp(0.0, 1.0)
+        pixel_values = (x01 - self._mean) / (self._std + 1e-8)
+
+        out = self.segformer(pixel_values=pixel_values)
+        logits = out.logits
+
+        if logits.shape[-2:] != images.shape[-2:]:
+            logits = F.interpolate(
+                logits,
+                size=images.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+        return logits
+
+
 def cubi_casa5k_model(args, logger):
     _m = args.model
+    if isinstance(_m, str) and _m.lower() == "segformer":
+        return CubiCasa5KSegFormer(args, logger)
     if isinstance(_m, str) and _m.startswith("unet"):
         return CubiCasa5KUnet(args, logger)
     return CubiCasa5KFurukawa(args, logger)
