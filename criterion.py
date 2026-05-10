@@ -17,6 +17,35 @@ def _class_weights_tensor(args, segmentation_map, logger):
     logger.info("Setting up loss weights: %s", weights)
     return weights
 
+class CrossEntropyAndTverskyLoss(nn.Module):
+    def __init__(
+        self,
+        tversky_weight=0.5,
+        alpha=0.6,
+        beta=0.4,
+        weight=None,
+    ):
+        super().__init__()
+        self.tversky_weight = float(tversky_weight)
+        if weight is not None:
+            self.register_buffer("weight", weight.detach().clone().float())
+        else:
+            self.register_buffer("weight", None)
+        self.cross_entropy = nn.CrossEntropyLoss(weight=weight)
+        self.tversky = smp.losses.TverskyLoss(
+            mode="multiclass",
+            from_logits=True,
+            alpha=alpha,
+            beta=beta,
+            smooth=1e-6,
+        )
+
+    def forward(self, logits, target):
+        return self.cross_entropy(logits, target) + self.tversky_weight * self.tversky(
+            logits, target
+        )
+
+
 class CrossEntropyAndDiceLoss(nn.Module):
     def __init__(self, dice_weight=1.0, weight=None):
         super().__init__()
@@ -59,7 +88,9 @@ class CrossEntropyLearnedWeightsLoss(nn.Module):
         w = self.normalized_class_weights()
         wt = w[target]
         # Mean-normalized w: regularize spread of s (not s.mean(); see legacy block above).
-        reg = -0.5 * torch.log(w + 1e-8).mean()
+        # 0.2 changed from 0.5 to reduce the regularization strength in case of high class imbalance
+        # TODO: return to 0.5 after further testing
+        reg = -0.2 * torch.log(w + 1e-8).mean()
         return (ce * wt).mean() + reg
 
 
@@ -91,6 +122,16 @@ def build_criterion(args, segmentation_map, n_output_channels, device, logger):
         dice_weight = getattr(args, "dice_weight", 1.0)
         return CrossEntropyAndDiceLoss(
             dice_weight=dice_weight, weight=weight
+        ).to(device)
+    if name == "cross-entropy-and-tversky":
+        tversky_weight = getattr(args, "tversky_weight", 0.5)
+        tversky_alpha = getattr(args, "tversky_alpha", 0.6)
+        tversky_beta = getattr(args, "tversky_beta", 0.4)
+        return CrossEntropyAndTverskyLoss(
+            tversky_weight=tversky_weight,
+            alpha=tversky_alpha,
+            beta=tversky_beta,
+            weight=weight,
         ).to(device)
     if name == "cross-entropy-learned-weights":
         return CrossEntropyLearnedWeightsLoss(n_output_channels).to(device)

@@ -4,19 +4,89 @@ import sys
 import logging
 from types import SimpleNamespace
 
+import cv2
 import matplotlib
 import numpy as np
 import torch
 import torch.nn.functional as F
-import yaml  # type: ignore[reportMissingModuleSource]
 from tqdm import tqdm
 
 from dataloader import build_cubi_casa5k_eval_dataloaders
 from floortrans.metrics import runningScore
 from model import cubi_casa5k_model
+from train_simple import TRAIN_SIMPLE_CONFIG_DEFAULTS
 
 matplotlib.use("Agg")
+
+WALL_CLASSES = [2]
 import matplotlib.pyplot as plt
+
+
+def _tensor_to_rgb_numpy(image_chw):
+    """Float tensor ``(3, H, W)`` → RGB array ``(H, W, 3)`` in ``[0, 1]`` for saving."""
+    x = image_chw.detach().cpu().float().numpy().transpose(1, 2, 0)
+    lo, hi = float(x.min()), float(x.max())
+    if hi - lo > 1e-6:
+        x = (x - lo) / (hi - lo)
+    return np.clip(x, 0.0, 1.0)
+
+
+def _tensor_to_bgr_uint8(image_chw):
+    """Float tensor ``(3, H, W)`` → BGR ``uint8`` for OpenCV."""
+    rgb01 = _tensor_to_rgb_numpy(image_chw)
+    rgb_u8 = (rgb01 * 255.0).astype(np.uint8)
+    return cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
+
+
+def _save_segmentation_map_png(path, seg_hw, n_classes):
+    """Full multiclass map as RGB PNG (``tab20``), same style as TensorBoard / earlier eval."""
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(
+        seg_hw,
+        vmin=0,
+        vmax=n_classes - 1,
+        cmap=plt.cm.tab20,
+        interpolation="nearest",
+    )
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_eval_room_triplet(
+    out_dir,
+    idx,
+    image_chw,
+    seg_pred_hw,
+    n_classes,
+):
+    """
+    Room segmentation only (12 classes): PNG exports —
+    ``*_input.png`` (BGR floorplan),
+    ``*_segmentation.png`` (multiclass map, tab20 figure),
+    ``*_wall.png`` (binary wall-class mask).
+    """
+    stem = f"sample_{idx:05d}"
+    bgr = _tensor_to_bgr_uint8(image_chw)
+    h, w = bgr.shape[:2]
+    cv2.imwrite(os.path.join(out_dir, f"{stem}_input.png"), bgr)
+
+    _save_segmentation_map_png(
+        os.path.join(out_dir, f"{stem}_segmentation.png"),
+        seg_pred_hw,
+        n_classes,
+    )
+
+    model_wall = np.isin(seg_pred_hw, WALL_CLASSES).astype(np.uint8)
+    if model_wall.shape[0] != h or model_wall.shape[1] != w:
+        model_wall = cv2.resize(
+            model_wall,
+            (w, h),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        model_wall = (model_wall > 0).astype(np.uint8)
+    cv2.imwrite(os.path.join(out_dir, f"{stem}_wall.png"), model_wall * 255)
 
 
 class SegmentationMapEvaluator:
@@ -52,7 +122,7 @@ class SegmentationMapEvaluator:
     def model_setup(self):
         return cubi_casa5k_model(self.args, self.logger)
 
-    def evaluate(self):
+    def evaluate(self, results_dir):
         # ------------------------------------------------------------
         # Setup
         # ------------------------------------------------------------
@@ -60,13 +130,27 @@ class SegmentationMapEvaluator:
         testloader = self.dataloader_setup()
         self.model = self.model_setup()
         self.load_state_dict_from_checkpoint()
-        running_metrics_map_val = runningScore(self.n_output_channels)
+        running_metrics_raw = runningScore(self.n_output_channels)
         self.model.eval()
+
+        room_eval = self.n_output_channels == 12
+        vis_dir = None
+        vis_indices = set()
+        if room_eval:
+            n_samples = len(testloader.dataset)
+            rng = np.random.default_rng(42)
+            k_vis = min(3, n_samples)
+            vis_indices = set(
+                rng.choice(n_samples, size=k_vis, replace=False).tolist()
+            )
+            vis_dir = os.path.join(results_dir, "eval_samples_seed42")
+            os.makedirs(vis_dir, exist_ok=True)
 
         # ------------------------------------------------------------
         # Evaluation
         # ------------------------------------------------------------
 
+        global_idx = 0
         with torch.no_grad():
             for _, samples in tqdm(
                 enumerate(testloader),
@@ -84,45 +168,33 @@ class SegmentationMapEvaluator:
                 outputs = self.model(images)
                 target = self.prepare_segmentation_target(labels, outputs.shape[2:])
 
-                map_pred = outputs.argmax(dim=1)[0].detach().cpu().numpy()
+                pred = outputs.argmax(dim=1).long()
+                map_pred = pred[0].detach().cpu().numpy()
                 map_gt = target[0].detach().cpu().numpy()
-                running_metrics_map_val.update([map_gt], [map_pred])
 
-        score, class_iou = running_metrics_map_val.get_scores()
-        confusion_matrix = running_metrics_map_val.confusion_matrix.copy()
-        return score, class_iou, confusion_matrix
+                running_metrics_raw.update([map_gt], [map_pred])
+
+                if room_eval and vis_dir is not None and global_idx in vis_indices:
+                    save_eval_room_triplet(
+                        vis_dir,
+                        global_idx,
+                        images[0],
+                        map_pred,
+                        self.n_output_channels,
+                    )
+
+                global_idx += 1
+
+        score, class_iou = running_metrics_raw.get_scores()
+        confusion_matrix = running_metrics_raw.confusion_matrix.copy()
+        return score, class_iou, confusion_matrix, vis_dir
 
 
 def load_eval_args(run_dir):
-    defaults = {
-        "segmentation_map": "room",
-        "optimizer": "adam-patience-previous-best",
-        "criterion": "cross-entropy",
-        "weights_method": "inverse_sqrt_frequency",
-        "focal_gamma": 2.0,
-        "dice_weight": 1.0,
-        "data_path": "data/cubicasa5k/",
-        "n_epoch": 400,
-        "batch_size": 26,
-        "image_size": 256,
-        "l_rate": 1e-3,
-        "l_rate_drop": 200,
-        "patience": 20,
-        "furukawa_weights": None,
-        "resume_from": None,
-        "log_path": "runs_cubi/",
-        "model": None,
-        "debug": False,
-        "num_workers": 16,
-        "prefetch_factor": 4,
-        "plot_samples": False,
-        "scale": False,
-    }
-
     args_path = os.path.join(run_dir, "args.json")
     with open(args_path, "r") as f:
         run_args = json.load(f)
-    merged = {**defaults, **run_args}
+    merged = {**TRAIN_SIMPLE_CONFIG_DEFAULTS, **run_args}
     merged["weights"] = os.path.join(run_dir, "model_best_val_loss.pkl")
     merged["log_path"] = run_dir + "/eval.log"
     merged["num_workers"] = 4
@@ -139,7 +211,7 @@ def _to_jsonable(value):
     return value
 
 
-def save_confusion_matrix_artifacts(run_dir, confusion_matrix):
+def save_confusion_matrix_artifacts(run_dir, confusion_matrix, stem="confusion_matrix"):
     row_sums = confusion_matrix.sum(axis=1, keepdims=True)
     normalized = np.divide(
         confusion_matrix,
@@ -165,7 +237,6 @@ def save_confusion_matrix_artifacts(run_dir, confusion_matrix):
         ylabel="True class",
         title="Confusion Matrix (row-normalized colors)",
     )
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
     for i in range(n_classes):
         for j in range(n_classes):
@@ -183,11 +254,11 @@ def save_confusion_matrix_artifacts(run_dir, confusion_matrix):
             )
 
     fig.tight_layout()
-    image_path = os.path.join(run_dir, "confusion_matrix.png")
+    image_path = os.path.join(run_dir, f"{stem}.png")
     fig.savefig(image_path, dpi=200)
     plt.close(fig)
 
-    raw_path = os.path.join(run_dir, "confusion_matrix_raw.json")
+    raw_path = os.path.join(run_dir, f"{stem}_raw.json")
     with open(raw_path, "w") as f:
         json.dump({"confusion_matrix": confusion_matrix.tolist()}, f, indent=2)
 
@@ -201,15 +272,18 @@ if __name__ == "__main__":
     args = load_eval_args(run_dir)
 
     evaluator = SegmentationMapEvaluator(args)
-    score, class_iou, confusion_matrix = evaluator.evaluate()
+    score, class_iou, confusion_matrix, vis_dir = evaluator.evaluate(results_dir=run_dir)
+
     confusion_image_path, confusion_raw_path = save_confusion_matrix_artifacts(
-        run_dir, confusion_matrix
+        run_dir, confusion_matrix, stem="confusion_matrix"
     )
+
     results = {
         "score": _to_jsonable(score),
         "class_iou": _to_jsonable(class_iou),
         "confusion_matrix_image": os.path.basename(confusion_image_path),
         "confusion_matrix_raw": os.path.basename(confusion_raw_path),
+        "eval_samples_dir": os.path.basename(vis_dir) if vis_dir else None,
     }
 
     output_path = os.path.join(run_dir, "eval.json")
@@ -219,3 +293,5 @@ if __name__ == "__main__":
     print(f"Saved evaluation results to {output_path}")
     print(f"Saved confusion matrix image to {confusion_image_path}")
     print(f"Saved confusion matrix raw values to {confusion_raw_path}")
+    if vis_dir:
+        print(f"Saved room samples (input / segmentation / wall) under {vis_dir}")

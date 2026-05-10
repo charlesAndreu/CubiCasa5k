@@ -18,6 +18,34 @@ from dataloader import build_cubi_casa5k_dataloaders
 from optimizer import build_optimizer_and_scheduler
 from training_tensorboard import TrainingTensorBoard
 
+TRAIN_SIMPLE_CONFIG_DEFAULTS = {
+    "segmentation_map": "room",
+    "optimizer": "adam-patience-previous-best",
+    "criterion": "cross-entropy",
+    "weights_method": "inverse_sqrt_frequency",
+    "focal_gamma": 2.0,
+    "dice_weight": 1.0,
+    "data_path": "data/cubicasa5k/",
+    "n_epoch": 400,
+    "batch_size": 26,
+    "image_size": 256,
+    "l_rate": 1e-3,
+    "l_rate_drop": 200,
+    "patience": 20,
+    "furukawa_weights": None,
+    "resume_from": None,
+    "log_path": "runs_cubi/",
+    "model": None,
+    "debug": False,
+    "num_workers": 16,
+    "prefetch_factor": 4,
+    "plot_samples": False,
+    "scale": False,
+    "tversky_weight": 0.5,
+    "tversky_alpha": 0.6,
+    "tversky_beta": 0.4,
+}
+
 
 class SegmentationMapTrainer:
 
@@ -113,9 +141,10 @@ class SegmentationMapTrainer:
             # ------------------------------------------------------------
             # epoch training
             # ------------------------------------------------------------
+            train_len = len(trainloader)
             for i, samples in tqdm(
                 enumerate(trainloader),
-                total=len(trainloader),
+                total=train_len,
                 ncols=80,
                 leave=False,
                 desc=f"Train ep {epoch + 1}/{self.args.n_epoch}",
@@ -150,9 +179,10 @@ class SegmentationMapTrainer:
             # ------------------------------------------------------------
             self.model.eval()
             val_losses = []
+            val_len = len(valloader)
             for i_val, samples_val in tqdm(
                 enumerate(valloader),
-                total=len(valloader),
+                total=val_len,
                 ncols=80,
                 leave=False,
                 desc=f"Val   ep {epoch + 1}/{self.args.n_epoch}",
@@ -266,30 +296,7 @@ if __name__ == "__main__":
         config_data = yaml.safe_load(f) or {}
     if not isinstance(config_data, dict):
         raise ValueError("Config file must contain a YAML mapping at top level.")
-    defaults = {
-        "segmentation_map": "room",
-        "optimizer": "adam-patience-previous-best",
-        "criterion": "cross-entropy",
-        "weights_method": "inverse_sqrt_frequency",
-        "focal_gamma": 2.0,
-        "dice_weight": 1.0,
-        "data_path": "data/cubicasa5k/",
-        "n_epoch": 400,
-        "batch_size": 26,
-        "image_size": 256,
-        "l_rate": 1e-3,
-        "l_rate_drop": 200,
-        "patience": 20,
-        "furukawa_weights": None,
-        "resume_from": None,
-        "log_path": "runs_cubi/",
-        "model": None,
-        "debug": False,
-        "num_workers": 16,
-        "prefetch_factor": 4,
-        "plot_samples": False,
-        "scale": False,
-    }
+    defaults = TRAIN_SIMPLE_CONFIG_DEFAULTS
     unknown_keys = sorted(set(config_data.keys()) - set(defaults.keys()))
     if unknown_keys:
         raise ValueError(f"Unknown config keys in {config_path}: {unknown_keys}")

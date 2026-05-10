@@ -1,5 +1,5 @@
 # Segmentation target: room or icon
-segmentation_map: icon
+segmentation_map: room
 
 # Model architecture: unet_resnet34, unet_resnet50, unet_resnet152
 model: null
@@ -13,15 +13,20 @@ model: null
 optimizer: adam-patience
 
 # Loss setup
-# criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss
-criterion: cross-entropy-learned-weights
-weights_method: null # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
+# criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss, cross-entropy-and-tversky, cross-entropy-learned-weights
+criterion: cross-entropy-and-tversky
+weights_method: inverse_sqrt_frequency # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
 focal_gamma: 2.0 # used when criterion = focal-loss
 dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
+tversky_weight: 1.0 # used when criterion = cross-entropy-and-tversky
+tversky_alpha: 0.6
+tversky_beta: 0.4
+
+# TODO: dice with 0.5 weight and tversky with 1 weight
 
 # Data and training length
 data_path: data/cubicasa5k/
-n_epoch: 300
+n_epoch: 350
 batch_size: 26
 image_size: 256
 
