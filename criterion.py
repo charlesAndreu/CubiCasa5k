@@ -12,6 +12,12 @@ def _class_weights_tensor(args, segmentation_map, logger):
         return None
     with open("class_counts.json", "r") as f:
         class_counts = json.load(f)
+    if segmentation_map not in class_counts:
+        logger.warning(
+            "No class_counts entry for '%s'; frequency weights disabled.",
+            segmentation_map,
+        )
+        return None
     counts = torch.tensor(class_counts[segmentation_map], dtype=torch.float32)
     weights = Weights(counts).weights(method=args.weights_method)
     logger.info("Setting up loss weights: %s", weights)

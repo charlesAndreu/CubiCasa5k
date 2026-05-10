@@ -3,12 +3,14 @@ import torch.nn as nn
 import segmentation_models_pytorch as smp
 from floortrans.models import hg_furukawa_original
 
+from dataloader import n_segmentation_classes
+
 
 class CubiCasa5KUnet(smp.Unet):
 
     def __init__(self, args, logger):
         segmentation_map = args.segmentation_map
-        n_output_channels = 12 if segmentation_map == "room" else 11
+        n_output_channels = n_segmentation_classes(segmentation_map)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model_type = args.model
         assert isinstance(model_type, str) and model_type.startswith("unet")
@@ -31,7 +33,7 @@ class CubiCasa5KFurukawa(hg_furukawa_original):
     def __init__(self, args, logger):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         segmentation_map = args.segmentation_map
-        self.n_out = 12 if segmentation_map == "room" else 11
+        self.n_out = n_segmentation_classes(segmentation_map)
 
         logger.info("No model specified, using furukawa model")
         logger.info(

@@ -4,11 +4,26 @@ import lmdb
 from torch.utils.data import DataLoader
 
 from floortrans.loaders.room_icon_loaders import (
+    ICON_MINI_DEFAULT_CLASS,
+    ICON_MINI_MAPPING,
+    ROOM_MINI_DEFAULT_CLASS,
+    ROOM_MINI_MAPPING,
     RoomLoader,
     IconLoader,
     build_simple_train_augmentations,
     build_simple_val_augmentations,
 )
+
+
+def n_segmentation_classes(segmentation_map):
+    """Head output channels: full room/icon vs reduced mini label spaces."""
+    if segmentation_map == "room-mini":
+        return 3
+    if segmentation_map == "icon-mini":
+        return 4
+    if segmentation_map.startswith("room"):
+        return 12
+    return 11
 
 
 def build_cubi_casa5k_dataloaders(args, segmentation_map, device, logger):
@@ -27,13 +42,17 @@ def build_cubi_casa5k_dataloaders(args, segmentation_map, device, logger):
 
     logger.info(
         "LMDB loader is %sLoader",
-        "Room" if segmentation_map == "room" else "Icon",
+        "Room" if segmentation_map.startswith("room") else "Icon",
     )
     train_aug = build_simple_train_augmentations(args)
     val_aug = build_simple_val_augmentations(args)
-    LoaderCls = RoomLoader if segmentation_map == "room" else IconLoader
-    train_set = LoaderCls(args.data_path, "train.txt", lmdb_env, train_aug)
-    val_set = LoaderCls(args.data_path, "val.txt", lmdb_env, val_aug)
+    LoaderCls = RoomLoader if segmentation_map.startswith("room") else IconLoader
+    # set label space (default or mini)
+    mini = "mini" in segmentation_map
+    logger.info(f"Using mini label space: {mini}")
+    # build train and val datasets
+    train_set = LoaderCls(args.data_path, "train.txt", lmdb_env, train_aug, mini=mini)
+    val_set = LoaderCls(args.data_path, "val.txt", lmdb_env, val_aug, mini=mini)
 
     if args.debug:
         num_workers = 0
@@ -84,10 +103,16 @@ def build_cubi_casa5k_eval_dataloaders(args, segmentation_map, device):
     )
 
     print(
-        f"LMDB eval loader is {'Room' if segmentation_map == 'room' else 'Icon'}Loader"
+        f"LMDB eval loader is {'Room' if segmentation_map.startswith('room') else 'Icon'}Loader"
     )
-    LoaderCls = RoomLoader if segmentation_map == "room" else IconLoader
-    test_set = LoaderCls(args.data_path, "test.txt", lmdb_env, None)
+    LoaderCls = RoomLoader if segmentation_map.startswith("room") else IconLoader
+    test_set = LoaderCls(
+        args.data_path,
+        "test.txt",
+        lmdb_env,
+        None,
+        mini="mini" in segmentation_map,
+    )
 
     num_workers = max(0, args.num_workers)
     persistent_workers = num_workers > 0

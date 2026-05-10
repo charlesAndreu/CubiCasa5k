@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from dataloader import build_cubi_casa5k_eval_dataloaders
+from dataloader import build_cubi_casa5k_eval_dataloaders, n_segmentation_classes
 from floortrans.metrics import runningScore
 from model import cubi_casa5k_model
 from train_simple import TRAIN_SIMPLE_CONFIG_DEFAULTS
@@ -94,7 +94,7 @@ class SegmentationMapEvaluator:
     def __init__(self, args):
         self.segmentation_map = args.segmentation_map
         self.args = args
-        self.n_output_channels = 12 if self.segmentation_map == "room" else 11
+        self.n_output_channels = n_segmentation_classes(self.segmentation_map)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.logger = logging.getLogger("eval")
 
@@ -133,7 +133,7 @@ class SegmentationMapEvaluator:
         running_metrics_raw = runningScore(self.n_output_channels)
         self.model.eval()
 
-        room_eval = self.n_output_channels == 12
+        room_eval = self.segmentation_map == "room"
         vis_dir = None
         vis_indices = set()
         if room_eval:

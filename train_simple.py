@@ -14,7 +14,7 @@ from model import cubi_casa5k_model
 from tensorboardX import SummaryWriter
 
 from criterion import CrossEntropyLearnedWeightsLoss, build_criterion
-from dataloader import build_cubi_casa5k_dataloaders
+from dataloader import build_cubi_casa5k_dataloaders, n_segmentation_classes
 from optimizer import build_optimizer_and_scheduler
 from training_tensorboard import TrainingTensorBoard
 
@@ -55,7 +55,7 @@ class SegmentationMapTrainer:
         self.log_dir = log_dir
         self.tb = TrainingTensorBoard(writer)
         self.logger = logger
-        self.n_output_channels = 12 if self.segmentation_map == "room" else 11
+        self.n_output_channels = n_segmentation_classes(self.segmentation_map)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def prepare_segmentation_target(self, labels, output_hw):
