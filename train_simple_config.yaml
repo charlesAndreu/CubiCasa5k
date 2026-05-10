@@ -5,7 +5,7 @@ segmentation_map: room-mini
 # - null: Furukawa stack
 # - unet_resnet34 / unet_resnet50 / unet_resnet152
 # - segformer: Hugging Face SegFormer
-model: segformer
+model: null
 # HF checkpoint id when model is segformer (ADE fine-tuned heads are replaced for num_labels)
 segformer_model_name: nvidia/segformer-b0-finetuned-ade-512-512
 

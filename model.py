@@ -89,7 +89,7 @@ class CubiCasa5KSegFormer(nn.Module):
             "nvidia/segformer-b0-finetuned-ade-512-512",
         )
         segmentation_map = args.segmentation_map
-        n_labels = 12 if segmentation_map == "room" else 11
+        n_labels = n_segmentation_classes(segmentation_map)
 
         logger.info(
             "Loading SegFormer %s with num_labels=%d (%s)",

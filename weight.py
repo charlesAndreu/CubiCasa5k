@@ -6,9 +6,35 @@ import lmdb
 import numpy as np
 from tqdm import tqdm
 
+from floortrans.loaders.room_icon_loaders import (
+    ICON_MINI_DEFAULT_CLASS,
+    ICON_MINI_MAPPING,
+    ROOM_MINI_DEFAULT_CLASS,
+    ROOM_MINI_MAPPING,
+)
+
 # Must match train_simple.py / segmentation heads
 N_ROOM_CLASSES = 12
 N_ICON_CLASSES = 11
+N_ROOM_MINI_CLASSES = 3
+N_ICON_MINI_CLASSES = 4
+
+
+def aggregate_full_counts_to_mini(
+    full_counts,
+    mini_mapping: dict,
+    mini_default_class: int,
+    n_mini: int,
+):
+    full_counts = np.asarray(full_counts, dtype=np.int64)
+    out = np.zeros(n_mini, dtype=np.int64)
+    for orig_idx, c in enumerate(full_counts):
+        if orig_idx in mini_mapping:
+            out[int(mini_mapping[orig_idx])] += c
+        else:
+            out[int(mini_default_class)] += c
+    return out.tolist()
+
 
 def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
     """Sum of per-class pixel counts over the whole LMDB (per image: bincount, then add)."""
@@ -46,7 +72,24 @@ def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
                 sum_icon += icc
     finally:
         env.close()
-    return {"room": sum_room.tolist(), "icon": sum_icon.tolist()}
+    room_list = sum_room.tolist()
+    icon_list = sum_icon.tolist()
+    return {
+        "room": room_list,
+        "icon": icon_list,
+        "room-mini": aggregate_full_counts_to_mini(
+            room_list,
+            ROOM_MINI_MAPPING,
+            ROOM_MINI_DEFAULT_CLASS,
+            N_ROOM_MINI_CLASSES,
+        ),
+        "icon-mini": aggregate_full_counts_to_mini(
+            icon_list,
+            ICON_MINI_MAPPING,
+            ICON_MINI_DEFAULT_CLASS,
+            N_ICON_MINI_CLASSES,
+        ),
+    }
 
 
 class Weights:
