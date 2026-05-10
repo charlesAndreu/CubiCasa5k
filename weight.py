@@ -77,18 +77,6 @@ def build_class_counts_dict(lmdb_path="data/cubicasa5k/cubi_lmdb"):
     return {
         "room": room_list,
         "icon": icon_list,
-        "room-mini": aggregate_full_counts_to_mini(
-            room_list,
-            ROOM_MINI_MAPPING,
-            ROOM_MINI_DEFAULT_CLASS,
-            N_ROOM_MINI_CLASSES,
-        ),
-        "icon-mini": aggregate_full_counts_to_mini(
-            icon_list,
-            ICON_MINI_MAPPING,
-            ICON_MINI_DEFAULT_CLASS,
-            N_ICON_MINI_CLASSES,
-        ),
     }
 
 

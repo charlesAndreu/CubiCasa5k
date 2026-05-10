@@ -4,7 +4,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import segmentation_models_pytorch as smp
-from weight import Weights
+from floortrans.loaders.room_icon_loaders import (
+    ICON_MINI_DEFAULT_CLASS,
+    ICON_MINI_MAPPING,
+    ROOM_MINI_DEFAULT_CLASS,
+    ROOM_MINI_MAPPING,
+)
+from weight import (
+    N_ICON_MINI_CLASSES,
+    N_ROOM_MINI_CLASSES,
+    Weights,
+    aggregate_full_counts_to_mini,
+)
 
 
 def _class_weights_tensor(args, segmentation_map, logger):
@@ -12,13 +23,30 @@ def _class_weights_tensor(args, segmentation_map, logger):
         return None
     with open("class_counts.json", "r") as f:
         class_counts = json.load(f)
-    if segmentation_map not in class_counts:
+    counts_list = class_counts.get(segmentation_map)
+    if counts_list is None and segmentation_map == "room-mini" :
+        counts_list = aggregate_full_counts_to_mini(
+            class_counts["room"],
+            ROOM_MINI_MAPPING,
+            ROOM_MINI_DEFAULT_CLASS,
+            N_ROOM_MINI_CLASSES,
+        )
+    elif counts_list is None and segmentation_map == "icon-mini" :
+        counts_list = aggregate_full_counts_to_mini(
+            class_counts["icon"],
+            ICON_MINI_MAPPING,
+            ICON_MINI_DEFAULT_CLASS,
+            N_ICON_MINI_CLASSES,
+        )
+
+    if counts_list is None:
         logger.warning(
-            "No class_counts entry for '%s'; frequency weights disabled.",
+            "No class_counts entry for '%s' (and no full-map fallback); frequency weights disabled.",
             segmentation_map,
         )
         return None
-    counts = torch.tensor(class_counts[segmentation_map], dtype=torch.float32)
+
+    counts = torch.tensor(counts_list, dtype=torch.float32)
     weights = Weights(counts).weights(method=args.weights_method)
     logger.info("Setting up loss weights: %s", weights)
     return weights
