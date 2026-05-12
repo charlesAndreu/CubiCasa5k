@@ -111,20 +111,14 @@ class CrossEntropyLearnedWeightsLoss(nn.Module):
     #     return (ce * wt).mean() + 0.5 * self.s.mean()
 
     def normalized_class_weights(self):
-        """``w = exp(-s)`` with mean 1 over classes (used in ``forward``)."""
         w_raw = torch.exp(-self.s)
         return w_raw / (w_raw.mean() + 1e-8)
 
     def forward(self, logits, target):
-        # Per-class multipliers must not be passed as `weight=` to F.cross_entropy when they
-        # depend on parameters (PyTorch disallows grad through that argument); apply after CE.
         ce = F.cross_entropy(logits, target, reduction="none")
         w = self.normalized_class_weights()
         wt = w[target]
-        # Mean-normalized w: regularize spread of s (not s.mean(); see legacy block above).
-        # 0.2 changed from 0.5 to reduce the regularization strength in case of high class imbalance
-        # TODO: return to 0.5 after further testing
-        reg = -0.2 * torch.log(w + 1e-8).mean()
+        reg = -0.5 * torch.log(w + 1e-8).mean()
         return (ce * wt).mean() + reg
 
 

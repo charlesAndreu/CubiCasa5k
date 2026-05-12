@@ -1,5 +1,5 @@
 # Segmentation target: room or icon
-segmentation_map: room-mini
+segmentation_map: icon-mini
 
 # Model architecture:
 # - null: Furukawa stack
@@ -20,7 +20,7 @@ optimizer: adam-patience
 # Loss setup
 # criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss, cross-entropy-and-tversky, cross-entropy-learned-weights
 criterion: cross-entropy
-weights_method: inverse_sqrt_frequency # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
+weights_method: null # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
 focal_gamma: 2.0 # used when criterion = focal-loss
 dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
 tversky_weight: 1.0 # used when criterion = cross-entropy-and-tversky
