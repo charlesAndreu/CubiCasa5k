@@ -10,6 +10,7 @@ from torchvision.transforms import RandomChoice
 from floortrans.loaders.augmentations import (
     ColorJitterTorch,
     Compose,
+    DictToTensor,
     RandomCropToSizeTorch,
     RandomRotations,
     ResizePaddedTorch,
@@ -23,7 +24,6 @@ ICON_MINI_DEFAULT_CLASS = 3  # rest -> 3
 
 
 def build_simple_train_augmentations(args) -> Compose:
-    """Crop/resize + rotation + color jitter; no DictToTensor (no heatmap channels)."""
     sz = (args.image_size, args.image_size)
     if args.scale:
         return Compose(
@@ -51,6 +51,44 @@ def build_simple_val_augmentations(args) -> Compose:
     """Deterministic resize/pad to ``image_size`` (no jitter, no heatmaps)."""
     sz = (args.image_size, args.image_size)
     return Compose([ResizePaddedTorch((0, 0), data_format="dict", size=sz)])
+
+
+def build_full_train_augmentations(args) -> Compose:
+    """Same pattern as ``train_2.py`` / ``FloorplanSVG`` LMDB: dict geo-aug, rotations, rasterize heatmaps, then color."""
+    sz = (args.image_size, args.image_size)
+    if args.scale:
+        return Compose(
+            [
+                RandomChoice(
+                    [
+                        RandomCropToSizeTorch(data_format="dict", size=sz),
+                        ResizePaddedTorch((0, 0), data_format="dict", size=sz),
+                    ]
+                ),
+                RandomRotations(format="cubi"),
+                DictToTensor(),
+                ColorJitterTorch(),
+            ]
+        )
+    return Compose(
+        [
+            RandomCropToSizeTorch(data_format="dict", size=sz),
+            RandomRotations(format="cubi"),
+            DictToTensor(),
+            ColorJitterTorch(),
+        ]
+    )
+
+
+def build_full_val_augmentations(args) -> Compose:
+    """Resize/pad like ``build_simple_val_augmentations``, then ``DictToTensor`` (legacy val uses tensorize only)."""
+    sz = (args.image_size, args.image_size)
+    return Compose(
+        [
+            ResizePaddedTorch((0, 0), data_format="dict", size=sz),
+            DictToTensor(),
+        ]
+    )
 
 
 class _SimpleSegLMDBDataset(Dataset):
@@ -167,3 +205,49 @@ class IconLoader(_SimpleSegLMDBDataset):
             mini_mapping=mini_mapping,
             mini_default_class=mini_default_class,
         )
+
+
+class FullLoader(Dataset):
+    """Full loader (room + icon + heatmaps)."""
+
+    def __init__(self, data_path: str, txt_file: str, lmdb_env, augmentations):
+        self.data_path = data_path.rstrip(os.sep) + os.sep
+        self.folders = genfromtxt(self.data_path + txt_file, dtype="str")
+        if self.folders.ndim == 0:
+            self.folders = np.array([str(self.folders)])
+        self.folders = np.array([str(f).strip() for f in self.folders], dtype=str)
+        self.folders = self.folders[self.folders != ""]
+        self.lmdb_env = lmdb_env
+        self.augmentations = augmentations
+
+    def __len__(self) -> int:
+        return len(self.folders)
+
+    def __getitem__(self, index: int) -> dict:
+        key = self.folders[index].encode("ascii")
+        with self.lmdb_env.begin(write=False) as txn:
+            blob = txn.get(key)
+        if blob is None:
+            raise KeyError(
+                f"LMDB key missing for '{self.folders[index]}' under {self.data_path}"
+            )
+        sample = pickle.loads(blob)
+        sample.setdefault("scale", 1.0)
+        sample["label"] = sample["label"].long()
+
+        # Geo-augs (RandomCrop / ResizePadded) spatially transform image+label and clip heatmap points.
+        # RandomRotations rotates image+label and remaps heatmap channel indices.
+        # DictToTensor rasterises the point dict into 21 Gaussian heatmap channels and
+        #   prepends them to label: (2,H,W) → (23,H,W) with [0:21]=heatmaps, [21]=room, [22]=icon.
+        # ColorJitterTorch perturbs brightness/contrast/saturation on image only.
+        if self.augmentations is not None:
+            sample = self.augmentations(sample)
+        # convert image to float and normalize to [-1, 1]
+        image = sample["image"].float()
+        image = 2 * (image / 255.0) - 1.0
+        label = sample["label"]
+        return {
+            "image": image,  # (3, H, W) in [-1, 1]
+            "label": label,  # (23, H, W): [0:21]=Gaussian heatmaps, [21]=room, [22]=icon
+            "folder": self.folders[index],
+        }

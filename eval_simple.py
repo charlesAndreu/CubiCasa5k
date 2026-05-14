@@ -11,9 +11,9 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from dataloader import build_cubi_casa5k_eval_dataloaders, n_segmentation_classes
+from dataloader import build_cubicasa5k_simple_eval_dataloaders, n_segmentation_classes
 from floortrans.metrics import runningScore
-from model import cubi_casa5k_model
+from model import cubi_casa5k_simple_model
 from train_simple import TRAIN_SIMPLE_CONFIG_DEFAULTS
 
 matplotlib.use("Agg")
@@ -111,7 +111,7 @@ class SegmentationMapEvaluator:
         return t.squeeze(1).long()
 
     def dataloader_setup(self):
-        return build_cubi_casa5k_eval_dataloaders(
+        return build_cubicasa5k_simple_eval_dataloaders(
             self.args, self.segmentation_map, self.device
         )
 
@@ -120,7 +120,7 @@ class SegmentationMapEvaluator:
         self.model.load_state_dict(checkpoint["model_state"])
 
     def model_setup(self):
-        return cubi_casa5k_model(self.args, self.logger)
+        return cubi_casa5k_simple_model(self.args, self.logger)
 
     def evaluate(self, results_dir):
         # ------------------------------------------------------------
@@ -140,9 +140,7 @@ class SegmentationMapEvaluator:
             n_samples = len(testloader.dataset)
             rng = np.random.default_rng(42)
             k_vis = min(3, n_samples)
-            vis_indices = set(
-                rng.choice(n_samples, size=k_vis, replace=False).tolist()
-            )
+            vis_indices = set(rng.choice(n_samples, size=k_vis, replace=False).tolist())
             vis_dir = os.path.join(results_dir, "eval_samples_seed42")
             os.makedirs(vis_dir, exist_ok=True)
 
@@ -225,7 +223,9 @@ def save_confusion_matrix_artifacts(run_dir, confusion_matrix, stem="confusion_m
 
     fig_size = max(8, min(16, n_classes * 0.8))
     fig, ax = plt.subplots(figsize=(fig_size, fig_size))
-    im = ax.imshow(normalized, interpolation="nearest", cmap="Blues", vmin=0.0, vmax=1.0)
+    im = ax.imshow(
+        normalized, interpolation="nearest", cmap="Blues", vmin=0.0, vmax=1.0
+    )
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Row-normalized score")
 
     ax.set(
@@ -272,7 +272,9 @@ if __name__ == "__main__":
     args = load_eval_args(run_dir)
 
     evaluator = SegmentationMapEvaluator(args)
-    score, class_iou, confusion_matrix, vis_dir = evaluator.evaluate(results_dir=run_dir)
+    score, class_iou, confusion_matrix, vis_dir = evaluator.evaluate(
+        results_dir=run_dir
+    )
 
     confusion_image_path, confusion_raw_path = save_confusion_matrix_artifacts(
         run_dir, confusion_matrix, stem="confusion_matrix"

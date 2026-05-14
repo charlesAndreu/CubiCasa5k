@@ -1,0 +1,37 @@
+# Optimizer strategy (choices):
+# - adam-patience: Adam + ReduceLROnPlateau on val loss
+# - adam-patience-previous-best: Adam + manual patience logic
+#   (reload best checkpoint + reduce LR by x0.1 after plateau)
+# - sgd: SGD with polynomial-style LambdaLR decay
+# - adam-scheduler: Adam with step-like LambdaLR decay (via l_rate_drop)
+optimizer: adam-patience
+
+# Per-head class weights for UncertaintyCustomLoss (null to disable)
+# choices: null, inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num
+room_weights_method: null
+icon_weights_method: null
+
+# Data and training length
+data_path: data/cubicasa5k/
+n_epoch: 350
+batch_size: 26
+image_size: 256
+
+# Learning-rate controls
+l_rate: 0.001
+l_rate_drop: 200 # used by adam-scheduler
+patience: 20 # used by patience-based optimizers
+
+# Checkpoints
+furukawa_weights: null # optional pretrained Furukawa weights
+resume_from: null # optional train_simple checkpoint to resume
+
+# Logging
+log_path: runs_cubi/
+plot_samples: true # log validation image/prediction samples to TensorBoard
+
+# DataLoader / augmentation flags
+debug: false # set true to force num_workers=0
+num_workers: 20
+prefetch_factor: 4
+scale: true # enable resize-padded augmentation branch

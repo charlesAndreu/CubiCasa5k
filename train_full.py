@@ -10,21 +10,18 @@ from datetime import datetime
 from types import SimpleNamespace
 from tqdm import tqdm
 from floortrans.metrics import runningScore
-from model import cubi_casa5k_simple_model
+from model import cubi_casa5k_full_model
 from tensorboardX import SummaryWriter
 
-from criterion import CrossEntropyLearnedWeightsLoss, build_simple_criterion
-from dataloader import build_cubicasa5k_simple_dataloaders, n_segmentation_classes
+from criterion import build_full_criterion
+from dataloader import build_cubicasa5k_full_dataloaders
 from optimizer import build_optimizer_and_scheduler
-from training_tensorboard import SimpleTrainingTensorBoard
+from training_tensorboard import FullTrainingTensorBoard
 
-TRAIN_SIMPLE_CONFIG_DEFAULTS = {
-    "segmentation_map": "room",
+TRAIN_FULL_CONFIG_DEFAULTS = {
     "optimizer": "adam-patience-previous-best",
-    "criterion": "cross-entropy",
-    "weights_method": "inverse_sqrt_frequency",
-    "focal_gamma": 2.0,
-    "dice_weight": 1.0,
+    "room_weights_method": "inverse_sqrt_frequency",
+    "icon_weights_method": "inverse_sqrt_frequency",
     "data_path": "data/cubicasa5k/",
     "n_epoch": 400,
     "batch_size": 26,
@@ -35,55 +32,39 @@ TRAIN_SIMPLE_CONFIG_DEFAULTS = {
     "furukawa_weights": None,
     "resume_from": None,
     "log_path": "runs_cubi/",
-    "model": None,
-    "segformer_model_name": "nvidia/segformer-b0-finetuned-ade-512-512",
     "debug": False,
-    "num_workers": 16,
+    "num_workers": 20,
     "prefetch_factor": 4,
-    "plot_samples": False,
-    "scale": False,
-    "tversky_weight": 0.5,
-    "tversky_alpha": 0.6,
-    "tversky_beta": 0.4,
+    "plot_samples": True,
+    "scale": True,
 }
 
 
-class SegmentationMapTrainer:
+class Cubicasa5kFullTrainer:
 
     def __init__(self, args, log_dir, writer, logger):
-        self.segmentation_map = args.segmentation_map
+        self.input_slice = [
+            21,
+            3,
+            4,
+        ]  # 21 heatmap channels, 3 room classes, 4 icon classes
+        self.n_output_channels = sum(self.input_slice)
         self.args = args
         self.log_dir = log_dir
-        self.tb = SimpleTrainingTensorBoard(writer)
+        self.tb = FullTrainingTensorBoard(writer)
         self.logger = logger
-        self.n_output_channels = n_segmentation_classes(self.segmentation_map)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def prepare_segmentation_target(self, labels, output_hw):
-        """
-        Prepare the segmentation target for CrossEntropyLoss from RoomLoader/IconLoader
-        labels ``(N, 1, H, W)`` or ``(N, H, W)`` (class indices).
-        """
-        t = labels.float()
-        if t.dim() == 3:
-            t = t.unsqueeze(1)
-        if t.shape[2:] != output_hw:
-            t = F.interpolate(t, size=output_hw, mode="nearest")
-        return t.squeeze(1).long()
-
     def dataloader_setup(self):
-        return build_cubicasa5k_simple_dataloaders(
-            self.args, self.segmentation_map, self.device, self.logger
-        )
+        return build_cubicasa5k_full_dataloaders(self.args, self.device, self.logger)
 
     def model_setup(self):
-        return cubi_casa5k_simple_model(self.args, self.logger)
+        return cubi_casa5k_full_model(self.args, self.logger)
 
     def criterion_setup(self):
-        return build_simple_criterion(
+        return build_full_criterion(
             self.args,
-            self.segmentation_map,
-            self.n_output_channels,
+            self.input_slice,
             self.device,
             self.logger,
         )
@@ -128,14 +109,21 @@ class SegmentationMapTrainer:
         first_best = True
         best_val_loss = np.inf
         start_epoch = 0
-        running_metrics_map_val = runningScore(self.n_output_channels)
+        # runningScore tracks mIoU/pixel-acc for classification heads
+        # heatmaps are regression (MSE) — already tracked via criterion loss
+        running_metrics_room_val = runningScore(
+            self.input_slice[1]
+        )  # 3 room-mini classes
+        running_metrics_icon_val = runningScore(
+            self.input_slice[2]
+        )  # 4 icon-mini classes
         best_val_loss_variance = np.inf
         no_improvement = 0
 
         # train for n_epochs (self.args.n_epoch)
         for epoch in range(start_epoch, self.args.n_epoch):
             self.model.train()
-            epoch_train_losses = []
+            epoch_train_scalars = []
             # ------------------------------------------------------------
             # epoch training
             # ------------------------------------------------------------
@@ -155,28 +143,33 @@ class SegmentationMapTrainer:
                 )
                 # outputs are logits: (N, n_output_channels, H, W)
                 outputs = self.model(images)
-                # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
-                target = self.prepare_segmentation_target(labels, outputs.shape[2:])
-                loss = self.criterion(outputs, target)
-                epoch_train_losses.append(loss.item())
+                loss = self.criterion(outputs, labels)
+                epoch_train_scalars.append(self.criterion.get_loss_scalars())
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-            train_loss = float(np.mean(epoch_train_losses))
+            keys = epoch_train_scalars[0].keys()
+            train_losses = {
+                k: float(np.mean([d[k] for d in epoch_train_scalars])) for k in keys
+            }
 
             self.logger.info(
-                "Epoch [%d/%d] Loss: %.4f" % (epoch + 1, self.args.n_epoch, train_loss)
+                "Epoch [%d/%d] Loss: %.4f"
+                % (epoch + 1, self.args.n_epoch, train_losses["total"])
             )
 
-            self.tb.log_training_scalars(epoch, train_loss, self.optimizer)
+            self.tb.log_training_scalars(epoch, train_losses, self.optimizer)
+            self.tb.log_uncertainty_vars(
+                epoch, self.criterion.get_uncertainty_scalars()
+            )
 
             # ------------------------------------------------------------
             # epoch validation
             # ------------------------------------------------------------
             self.model.eval()
-            val_losses = []
+            val_scalars = []
             val_len = len(valloader)
             for samples_val in tqdm(
                 valloader,
@@ -194,20 +187,38 @@ class SegmentationMapTrainer:
                     )
 
                     outputs = self.model(images_val)
-                    target = self.prepare_segmentation_target(
-                        labels_val, outputs.shape[2:]
+                    loss = self.criterion(outputs, labels_val)
+                    val_scalars.append(self.criterion.get_loss_scalars())
+
+                    room_start = self.input_slice[0]
+                    room_end = room_start + self.input_slice[1]
+                    icon_end = room_end + self.input_slice[2]
+
+                    room_pred = (
+                        outputs[0, room_start:room_end]
+                        .argmax(dim=0)
+                        .detach()
+                        .cpu()
+                        .numpy()
                     )
-                    loss = self.criterion(outputs, target)
-                    val_losses.append(loss.item())
+                    room_gt = labels_val[0, room_start].long().detach().cpu().numpy()
+                    running_metrics_room_val.update([room_gt], [room_pred])
 
-                    # Per-pixel class predictions: (N, C, H, W) -> argmax over C
-                    map_pred = outputs.argmax(dim=1)[0].detach().cpu().numpy()
-                    map_gt = target[0].detach().cpu().numpy()
-                    running_metrics_map_val.update([map_gt], [map_pred])
+                    icon_pred = (
+                        outputs[0, room_end:icon_end]
+                        .argmax(dim=0)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
+                    icon_gt = labels_val[0, room_end].long().detach().cpu().numpy()
+                    running_metrics_icon_val.update([icon_gt], [icon_pred])
 
-            val_loss_mean = float(np.mean(val_losses))
+            keys = val_scalars[0].keys()
+            val_losses = {k: float(np.mean([d[k] for d in val_scalars])) for k in keys}
+            val_loss_mean = val_losses["total_var"]
             self.logger.info("val_loss: %.4f" % val_loss_mean)
-            self.tb.log_validation_loss(epoch, val_loss_mean)
+            self.tb.log_validation_scalars(epoch, val_losses)
 
             # ------------------------------------------------------------
             # Learning rate scheduler
@@ -239,9 +250,13 @@ class SegmentationMapTrainer:
             elif self.args.optimizer in ["sgd", "adam-scheduler"]:
                 self.scheduler.step(epoch + 1)
 
-            score, class_iou = running_metrics_map_val.get_scores()
-            self.tb.log_validation_map_metrics(epoch, score, class_iou)
-            running_metrics_map_val.reset()
+            score, class_iou = running_metrics_room_val.get_scores()
+            self.tb.log_validation_map_metrics(epoch, score, class_iou, head="room")
+            running_metrics_room_val.reset()
+
+            score, class_iou = running_metrics_icon_val.get_scores()
+            self.tb.log_validation_map_metrics(epoch, score, class_iou, head="icon")
+            running_metrics_icon_val.reset()
 
             # ------------------------------------------------------------
             # Save best validation model
@@ -249,18 +264,6 @@ class SegmentationMapTrainer:
             if val_loss_mean < best_val_loss:
                 best_val_loss = val_loss_mean
                 self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
-                if isinstance(self.criterion, CrossEntropyLearnedWeightsLoss):
-                    w = (
-                        self.criterion.normalized_class_weights()
-                        .detach()
-                        .cpu()
-                        .numpy()
-                        .reshape(-1)
-                    )
-                    self.logger.info(
-                        "Learned per-class weights (mean-normalized): [%s]",
-                        ", ".join(f"{float(x):.4f}" for x in w),
-                    )
                 self.save_checkpoint(
                     "model_best_val_loss.pkl",
                     epoch + 1,
@@ -272,8 +275,8 @@ class SegmentationMapTrainer:
                     first_best,
                     self.model,
                     self.args,
-                    self.segmentation_map,
-                    self.n_output_channels,
+                    "full",
+                    self.input_slice,
                     self.device,
                 )
 
@@ -289,12 +292,12 @@ class SegmentationMapTrainer:
 
 if __name__ == "__main__":
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    config_path = "train_simple_config.yaml"
+    config_path = "train_full_config.yaml"
     with open(config_path, "r") as f:
         config_data = yaml.safe_load(f) or {}
     if not isinstance(config_data, dict):
         raise ValueError("Config file must contain a YAML mapping at top level.")
-    defaults = TRAIN_SIMPLE_CONFIG_DEFAULTS
+    defaults = TRAIN_FULL_CONFIG_DEFAULTS
     unknown_keys = sorted(set(config_data.keys()) - set(defaults.keys()))
     if unknown_keys:
         raise ValueError(f"Unknown config keys in {config_path}: {unknown_keys}")
@@ -314,5 +317,5 @@ if __name__ == "__main__":
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    trainer = SegmentationMapTrainer(args, log_dir, writer, logger)
+    trainer = Cubicasa5kFullTrainer(args, log_dir, writer, logger)
     trainer.train()

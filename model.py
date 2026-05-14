@@ -8,7 +8,6 @@ from dataloader import n_segmentation_classes
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
 
-
 class CubiCasa5KUnet(smp.Unet):
 
     def __init__(self, args, logger):
@@ -34,14 +33,21 @@ class CubiCasa5KUnet(smp.Unet):
 class CubiCasa5KFurukawa(hg_furukawa_original):
 
     def __init__(self, args, logger):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        segmentation_map = args.segmentation_map
-        self.n_out = n_segmentation_classes(segmentation_map)
-
         logger.info("No model specified, using furukawa model")
-        logger.info(
-            f"Using furukawa model with {self.n_out} channels for {segmentation_map} segmentation map"
-        )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        segmentation_map = getattr(args, "segmentation_map", None)
+        if segmentation_map is None:
+            self.n_out = (
+                3 + 4 + 21
+            )  # 3 room classes, 4 icon classes, 21 heatmap classes
+            logger.info(
+                f"Using furukawa model with {self.n_out} channels for room + icon + heatmaps"
+            )
+        else:
+            self.n_out = n_segmentation_classes(segmentation_map)
+            logger.info(
+                f"Using furukawa model with {self.n_out} channels for {segmentation_map} segmentation map"
+            )
         super().__init__(n_heatmap_channels=0, n_output_channels=51)
 
         resume = bool(args.resume_from)
@@ -136,7 +142,7 @@ class CubiCasa5KSegFormer(nn.Module):
         return logits
 
 
-def cubi_casa5k_model(args, logger):
+def cubi_casa5k_simple_model(args, logger):
     _m = args.model
     if isinstance(_m, str) and _m.lower() == "segformer":
         return CubiCasa5KSegFormer(args, logger)
@@ -144,3 +150,6 @@ def cubi_casa5k_model(args, logger):
         return CubiCasa5KUnet(args, logger)
     return CubiCasa5KFurukawa(args, logger)
 
+
+def cubi_casa5k_full_model(args, logger):
+    return CubiCasa5KFurukawa(args, logger)

@@ -1,5 +1,3 @@
-"""TensorBoard logging for CubiCasa5k simple training (tensorboardX SummaryWriter)."""
-
 import math
 
 import matplotlib
@@ -18,7 +16,7 @@ def _tb_finite_float(x):
     return v
 
 
-class TrainingTensorBoard:
+class SimpleTrainingTensorBoard:
     """Wraps a ``SummaryWriter`` (or ``None`` when logging is disabled)."""
 
     def __init__(self, writer):
@@ -47,17 +45,17 @@ class TrainingTensorBoard:
     def log_validation_loss(self, epoch, val_loss_mean):
         self._log_scalar("validation/loss", val_loss_mean, 1 + epoch)
 
-    def log_validation_map_metrics(self, epoch, score, class_iou):
+    def log_validation_map_metrics(self, epoch, score, class_iou, head=""):
         if self.writer is None:
             return
         step = 1 + epoch
+        prefix = f"validation/map/{head}/" if head else "validation/map/"
         for name, val in score.items():
-            tag = "validation/map/general/" + name.replace(" ", "_")
-            self._log_scalar(tag, val, step)
+            self._log_scalar(prefix + "general/" + name.replace(" ", "_"), val, step)
         for cls, val in class_iou["Class IoU"].items():
-            self._log_scalar("validation/map/class_iou/" + str(cls), val, step)
+            self._log_scalar(prefix + "class_iou/" + str(cls), val, step)
         for cls, val in class_iou["Class Acc"].items():
-            self._log_scalar("validation/map/class_acc/" + str(cls), val, step)
+            self._log_scalar(prefix + "class_acc/" + str(cls), val, step)
         self.writer.flush()
 
     def log_new_best_val_visualizations(
@@ -121,3 +119,37 @@ class TrainingTensorBoard:
     def close(self):
         if self.writer is not None:
             self.writer.close()
+
+
+class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
+
+    def log_training_scalars(self, epoch, losses: dict, optimizer):
+        if self.writer is None:
+            return
+        step = 1 + epoch
+        self._log_scalar("training/loss/total", losses["total"], step)
+        self._log_scalar("training/loss/rooms", losses["rooms"], step)
+        self._log_scalar("training/loss/icons", losses["icons"], step)
+        self._log_scalar("training/loss/heatmap", losses["heatmap"], step)
+        self._log_scalar("training/loss/total_var", losses["total_var"], step)
+        self._log_scalar("training/loss/rooms_var", losses["rooms_var"], step)
+        self._log_scalar("training/loss/icons_var", losses["icons_var"], step)
+        self._log_scalar("training/loss/heatmap_var", losses["heatmap_var"], step)
+        self._log_scalar("training/lr", optimizer.param_groups[0]["lr"], step)
+
+    def log_validation_scalars(self, epoch, losses: dict):
+        if self.writer is None:
+            return
+        step = 1 + epoch
+        self._log_scalar("validation/loss/total", losses["total"], step)
+        self._log_scalar("validation/loss/rooms", losses["rooms"], step)
+        self._log_scalar("validation/loss/icons", losses["icons"], step)
+        self._log_scalar("validation/loss/heatmap", losses["heatmap"], step)
+        self._log_scalar("validation/loss/total_var", losses["total_var"], step)
+
+    def log_uncertainty_vars(self, epoch, uncertainty: dict):
+        if self.writer is None:
+            return
+        step = 1 + epoch
+        self._log_scalar("uncertainty/room_var", uncertainty["room_var"], step)
+        self._log_scalar("uncertainty/icon_var", uncertainty["icon_var"], step)
