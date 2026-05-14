@@ -26,7 +26,7 @@ def n_segmentation_classes(segmentation_map):
 
 
 def build_cubicasa5k_simple_dataloaders(args, segmentation_map, device, logger):
-    """Open LMDB, build train/val datasets and PyTorch ``DataLoader``s."""
+    """Open LMDB, build train/val datasets and PyTorch DataLoaders."""
     logger.info("Loading data...")
     root = args.data_path.rstrip(os.sep)
     lmdb_path = os.path.join(root, "cubi_lmdb")
@@ -89,7 +89,7 @@ def build_cubicasa5k_simple_dataloaders(args, segmentation_map, device, logger):
 
 
 def build_cubicasa5k_full_dataloaders(args, device, logger):
-    """Open LMDB, build train/val datasets and PyTorch ``DataLoader``s."""
+    """Open LMDB, build train/val datasets and PyTorch DataLoaders."""
     logger.info("Loading data...")
     root = args.data_path.rstrip(os.sep)
     lmdb_path = os.path.join(root, "cubi_lmdb")
@@ -146,7 +146,7 @@ def build_cubicasa5k_full_dataloaders(args, device, logger):
 
 
 def build_cubicasa5k_simple_eval_dataloaders(args, segmentation_map, device):
-    """Open LMDB, build test dataset and PyTorch ``DataLoader``s."""
+    """Open LMDB, build test dataset and PyTorch DataLoaders."""
     root = args.data_path.rstrip(os.sep)
     lmdb_path = os.path.join(root, "cubi_lmdb")
     lmdb_env = lmdb.open(

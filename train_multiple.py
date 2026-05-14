@@ -57,7 +57,7 @@ class SegmentationMapTrainer:
         Prepare the segmentation target for the CrossEntropyLoss.
         Room/icon map from full label stack -> (N, H, W) long for CrossEntropyLoss.
 
-        labels: (N, 23, H, W) for full stack, or (N, 1, H, W) when ``--dataset-loader simple``.
+        labels: (N, 23, H, W) for full stack, or (N, 1, H, W) when --dataset-loader simple.
         output_hw: (H, W) must match logits spatial size.
         """
         if self.simple_loader:

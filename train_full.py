@@ -107,7 +107,7 @@ class Cubicasa5kFullTrainer:
 
         # set up variables for training
         first_best = True
-        best_val_loss = np.inf
+        best_val_loss = np.inf  # best validation total_var (training-aligned objective)
         start_epoch = 0
         # runningScore tracks mIoU/pixel-acc for classification heads
         # heatmaps are regression (MSE) — already tracked via criterion loss
@@ -117,7 +117,6 @@ class Cubicasa5kFullTrainer:
         running_metrics_icon_val = runningScore(
             self.input_slice[2]
         )  # 4 icon-mini classes
-        best_val_loss_variance = np.inf
         no_improvement = 0
 
         # train for n_epochs (self.args.n_epoch)
@@ -156,8 +155,8 @@ class Cubicasa5kFullTrainer:
             }
 
             self.logger.info(
-                "Epoch [%d/%d] Loss: %.4f"
-                % (epoch + 1, self.args.n_epoch, train_losses["total"])
+                "Epoch [%d/%d] Loss (total_var): %.4f"
+                % (epoch + 1, self.args.n_epoch, train_losses["total_var"])
             )
 
             self.tb.log_training_scalars(epoch, train_losses, self.optimizer)
@@ -217,20 +216,21 @@ class Cubicasa5kFullTrainer:
 
             keys = val_scalars[0].keys()
             val_losses = {k: float(np.mean([d[k] for d in val_scalars])) for k in keys}
-            val_loss_mean = val_losses["total_var"]
-            self.logger.info("val_loss: %.4f" % val_loss_mean)
+            val_loss_var = val_losses["total_var"]
+            self.logger.info("val_loss (total_var): %.4f", val_loss_var)
             self.tb.log_validation_scalars(epoch, val_losses)
+
+            val_improved = val_loss_var < best_val_loss
+            if val_improved:
+                best_val_loss = val_loss_var
 
             # ------------------------------------------------------------
             # Learning rate scheduler
             # ------------------------------------------------------------
-            # adam-patience: reduce learning rate when validation loss plateaus
             if self.args.optimizer == "adam-patience":
-                self.scheduler.step(val_loss_mean)
-            # adam-patience-previous-best: reduce learning rate when validation loss plateaus and save the best model
+                self.scheduler.step(val_loss_var)
             elif self.args.optimizer == "adam-patience-previous-best":
-                if best_val_loss_variance > val_loss_mean:
-                    best_val_loss_variance = val_loss_mean
+                if val_improved:
                     no_improvement = 0
                 else:
                     no_improvement += 1
@@ -240,14 +240,13 @@ class Cubicasa5kFullTrainer:
                         + str(no_improvement)
                         + " loading last best model and reducing learning rate."
                     )
-                    checkpoint = torch.load(self.log_dir + "/model_best_val_loss.pkl")
+                    checkpoint = torch.load(
+                        os.path.join(self.log_dir, "model_best_val_loss.pkl")
+                    )
                     self.model.load_state_dict(checkpoint["model_state"])
                     for i, p in enumerate(self.optimizer.param_groups):
                         self.optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
                     no_improvement = 0
-
-            # sgd: reduce learning rate when validation loss plateaus
-            # adam-scheduler: reduce learning rate when validation loss plateaus
             elif self.args.optimizer in ["sgd", "adam-scheduler"]:
                 self.scheduler.step(epoch + 1)
 
@@ -260,11 +259,12 @@ class Cubicasa5kFullTrainer:
             running_metrics_icon_val.reset()
 
             # ------------------------------------------------------------
-            # Save best validation model
+            # Save best validation checkpoint (total_var only)
             # ------------------------------------------------------------
-            if val_loss_mean < best_val_loss:
-                best_val_loss = val_loss_mean
-                self.logger.info("New best val loss, saving model_best_val_loss.pkl...")
+            if val_improved:
+                self.logger.info(
+                    "New best val loss (total_var), saving model_best_val_loss.pkl..."
+                )
                 self.save_checkpoint(
                     "model_best_val_loss.pkl",
                     epoch + 1,
@@ -280,7 +280,6 @@ class Cubicasa5kFullTrainer:
                     self.n_output_channels,
                     self.device,
                 )
-
                 first_best = False
 
         # ------------------------------------------------------------

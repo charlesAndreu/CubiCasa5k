@@ -124,7 +124,7 @@ class CubiCasa5KSegFormer(nn.Module):
         self.to(device)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        # ``images``: (N, 3, H, W), [-1, 1] from cubicasa augmentations
+        # images: (N, 3, H, W), [-1, 1] from cubicasa augmentations
         x01 = (images + 1.0) * 0.5
         x01 = x01.clamp(0.0, 1.0)
         pixel_values = (x01 - self._mean) / (self._std + 1e-8)

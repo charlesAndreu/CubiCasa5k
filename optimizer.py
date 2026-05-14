@@ -12,8 +12,8 @@ def _optimizer_parameters(model, criterion):
 
 def build_optimizer_and_scheduler(args, model, criterion):
     """
-    Build ``(optimizer, scheduler)`` from config. ``scheduler`` is ``None`` for
-    ``adam-patience-previous-best`` (that path handles LR in the training loop).
+    Build (optimizer, scheduler) from config. scheduler is None for
+    adam-patience-previous-best (that path handles LR in the training loop).
     """
     params = _optimizer_parameters(model, criterion)
     name = args.optimizer

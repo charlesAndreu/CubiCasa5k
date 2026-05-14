@@ -324,7 +324,7 @@ class UncertaintyCustomLoss(nn.Module):
 
 
 def build_simple_criterion(args, segmentation_map, n_output_channels, device, logger):
-    """Construct the training criterion from CLI-style ``args`` (``criterion``, ``weights_method``, etc.)."""
+    """Construct the training criterion from CLI-style args (criterion, weights_method, etc.)."""
     weight = _class_weights_tensor(args, segmentation_map, logger)
     name = args.criterion
     if name == "cross-entropy":
@@ -352,7 +352,7 @@ def build_simple_criterion(args, segmentation_map, n_output_channels, device, lo
 
 
 def build_full_criterion(args, input_slice, device, logger):
-    """Build ``UncertaintyCustomLoss`` with optional per-class weights for room and icon heads."""
+    """Build UncertaintyCustomLoss with optional per-class weights for room and icon heads."""
     room_weight = _class_weights_tensor(
         args, "room-mini", logger, weights_method=getattr(args, "room_weights_method", None)
     )

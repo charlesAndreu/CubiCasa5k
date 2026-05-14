@@ -62,7 +62,7 @@ class SegmentationMapTrainer:
     def prepare_segmentation_target(self, labels, output_hw):
         """
         Prepare the segmentation target for CrossEntropyLoss from RoomLoader/IconLoader
-        labels ``(N, 1, H, W)`` or ``(N, H, W)`` (class indices).
+        labels (N, 1, H, W) or (N, H, W) (class indices).
         """
         t = labels.float()
         if t.dim() == 3:

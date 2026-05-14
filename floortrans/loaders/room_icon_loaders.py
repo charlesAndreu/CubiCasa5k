@@ -16,7 +16,7 @@ from floortrans.loaders.augmentations import (
     ResizePaddedTorch,
 )
 
-# Reduced ("mini") label spaces — keep here to avoid circular imports with ``dataloader``.
+# Reduced ("mini") label spaces — keep here to avoid circular imports with dataloader.
 ROOM_MINI_MAPPING = {0: 0, 2: 1, 8: 1}  # bg -> 0; wall+railing -> 1
 ROOM_MINI_DEFAULT_CLASS = 2  # rest -> 2
 ICON_MINI_MAPPING = {0: 0, 1: 1, 2: 2}  # bg -> 0; window -> 1; door -> 2
@@ -26,7 +26,7 @@ ICON_MINI_DEFAULT_CLASS = 3  # rest -> 3
 def map_seg_plane_to_mini(
     plane: torch.Tensor, mapping: dict, default_class: int
 ) -> torch.Tensor:
-    """Map full-resolution class ids ``(H, W)`` to mini ids ``(H, W)`` long (same rules as ``get_mini_label``)."""
+    """Map full-resolution class ids (H, W) to mini ids (H, W) long (same rules as get_mini_label)."""
     p = plane.round().long()
     h, w = p.shape
     out = torch.full(
@@ -65,13 +65,13 @@ def build_simple_train_augmentations(args) -> Compose:
 
 
 def build_simple_val_augmentations(args) -> Compose:
-    """Deterministic resize/pad to ``image_size`` (no jitter, no heatmaps)."""
+    """Deterministic resize/pad to image_size (no jitter, no heatmaps)."""
     sz = (args.image_size, args.image_size)
     return Compose([ResizePaddedTorch((0, 0), data_format="dict", size=sz)])
 
 
 def build_full_train_augmentations(args) -> Compose:
-    """Same pattern as ``train_2.py`` / ``FloorplanSVG`` LMDB: dict geo-aug, rotations, rasterize heatmaps, then color."""
+    """Same pattern as train_2.py / FloorplanSVG LMDB: dict geo-aug, rotations, rasterize heatmaps, then color."""
     sz = (args.image_size, args.image_size)
     if args.scale:
         return Compose(
@@ -98,7 +98,7 @@ def build_full_train_augmentations(args) -> Compose:
 
 
 def build_full_val_augmentations(args) -> Compose:
-    """Resize/pad like ``build_simple_val_augmentations``, then ``DictToTensor`` (legacy val uses tensorize only)."""
+    """Resize/pad like build_simple_val_augmentations, then DictToTensor (legacy val uses tensorize only)."""
     sz = (args.image_size, args.image_size)
     return Compose(
         [
@@ -109,7 +109,7 @@ def build_full_val_augmentations(args) -> Compose:
 
 
 class _SimpleSegLMDBDataset(Dataset):
-    """Read Cubi LMDB pickles; apply ``augmentations``; return image + single-channel label."""
+    """Read Cubi LMDB pickles; apply augmentations; return image + single-channel label."""
 
     def __init__(
         self,

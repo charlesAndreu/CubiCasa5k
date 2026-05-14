@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 
 
 def _tensor_to_rgb_numpy(image_chw):
-    """Float tensor ``(3, H, W)`` → RGB array ``(H, W, 3)`` in ``[0, 1]`` for saving."""
+    """Float tensor (3, H, W) → RGB array (H, W, 3) in [0, 1] for saving."""
     x = image_chw.detach().cpu().float().numpy().transpose(1, 2, 0)
     lo, hi = float(x.min()), float(x.max())
     if hi - lo > 1e-6:
@@ -32,14 +32,14 @@ def _tensor_to_rgb_numpy(image_chw):
 
 
 def _tensor_to_bgr_uint8(image_chw):
-    """Float tensor ``(3, H, W)`` → BGR ``uint8`` for OpenCV."""
+    """Float tensor (3, H, W) → BGR uint8 for OpenCV."""
     rgb01 = _tensor_to_rgb_numpy(image_chw)
     rgb_u8 = (rgb01 * 255.0).astype(np.uint8)
     return cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
 
 
 def _save_segmentation_map_png(path, seg_hw, n_classes):
-    """Full multiclass map as RGB PNG (``tab20``), same style as TensorBoard / earlier eval."""
+    """Full multiclass map as RGB PNG (tab20), same style as TensorBoard / earlier eval."""
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(
         seg_hw,
@@ -63,9 +63,9 @@ def save_eval_room_triplet(
 ):
     """
     Room segmentation only (12 classes): PNG exports —
-    ``*_input.png`` (BGR floorplan),
-    ``*_segmentation.png`` (multiclass map, tab20 figure),
-    ``*_wall.png`` (binary wall-class mask).
+    *_input.png (BGR floorplan),
+    *_segmentation.png (multiclass map, tab20 figure),
+    *_wall.png (binary wall-class mask).
     """
     stem = f"sample_{idx:05d}"
     bgr = _tensor_to_bgr_uint8(image_chw)
@@ -101,7 +101,7 @@ class SegmentationMapEvaluator:
     def prepare_segmentation_target(self, labels, output_hw):
         """
         Prepare the segmentation target for CrossEntropyLoss from RoomLoader/IconLoader
-        labels ``(N, 1, H, W)`` or ``(N, H, W)`` (class indices).
+        labels (N, 1, H, W) or (N, H, W) (class indices).
         """
         t = labels.float()
         if t.dim() == 3:

@@ -1,32 +1,32 @@
 # Python virtual environment
 
-```bash
+`bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
+`
 
 or with conda
-```bash
+`bash
 conda create -n charles-cubicasa python=3.11
 conda activate charles-cubicasa
 pip install -r requirements.txt
 # pour mon système : version de torch compatible avec la version de CUDA 12.4
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-```
+`
 
 
 # Creating the LMDB database
-```bash
+`bash
 python create_lmdb.py --txt train.txt
 python create_lmdb.py --txt val.txt
 python create_lmdb.py --txt test.txt
-```
+`
 For smaller subsets you can use the `sample_data.txt` file.
 
 multiplewarnings while creating the LMDB database:
-```bash
+`bash
 libpng warning: iCCP: profile 'ICC Profile': 'CMYK': invalid ICC profile color space
 # and in validation set:
 libpng warning: iCCP: profile 'ICC Profile': 'tech': ICC profile tag start not a multiple of 4
@@ -46,46 +46,46 @@ libpng warning: iCCP: profile 'ICC Profile': 'view': ICC profile tag start not a
 libpng warning: iCCP: profile 'ICC Profile': 'lumi': ICC profile tag start not a multiple of 4
 libpng warning: iCCP: profile 'ICC Profile': 'meas': ICC profile tag start not a multiple of 4
 libpng warning: iCCP: profile 'ICC Profile': 'tech': ICC profile tag start not a multiple of 4
-```
+`
 i fixed issue in data loader when creating the LMDB database by using uint16 instead of uint8 : wall_id increments for each Wall/Railing in the SVG; it reached 256, which doesn't fit in np.uint8 (0-255). Changing wall_ids to np.uint16.
 
 database size: 26G
 
 **Debug datasets** (separate LMDB at `data/cubicasa5k/debug/cubi_lmdb/`, run from the repo root):
 
-```bash
+`bash
 python create_lmdb.py --txt debug/train.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/ --overwrite
 python create_lmdb.py --txt debug/val.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/
 python create_lmdb.py --txt debug/test.txt --data-path data/cubicasa5k/ --lmdb data/cubicasa5k/debug/cubi_lmdb/
-```
+`
 
 **Simple debug training** on the debug dataset:
 
 seems that we should use --image-size 256 for representative runs : this is the default.
-```bash
+`bash
 python train_simple.py --debug --segmentation-map room --data-path data/cubicasa5k/debug/ --image-size 128 --n-epoch 3 --batch-size 3
-```
+`
 
 generate images on tensorboard:
-```bash
+`bash
 python train_simple.py   --segmentation-map room   --data-path data/cubicasa5k/debug/    --n-epoch 100   --batch-size 3   --debug --plot-samples
 # launch tensorboard
 tensorboard --logdir runs_cubi --port 6006
-```
+`
 
 premier entraînement avec les valeurs par défaut sur 350 epochs
-```bash
+`bash
 nohup python train_simple.py   --segmentation-map room  --n-epoch 350 --plot-samples &
-```
+`
 
 weighted cross-entropy:
-```bash
+`bash
 python train_simple.py   --segmentation-map room  --n-epoch 350 --plot-samples --criterion weighted-cross-entropy
-```
+`
 
 Si on fait simplement la moyenne de l'inverse de la fréquence, on obtient des poids très déséquilibrés, surtout pour les icons.
 poids:
-```bash
+`bash
 # formula : 
 weights = 1.0 / (freqs + 1e-6)
 weights = weights / weights.mean() # keep weights mean equal to 1
@@ -93,9 +93,9 @@ weights = weights / weights.mean() # keep weights mean equal to 1
 [0.0469, 0.3466, 0.2120, 0.3620, 0.2044, 0.2325, 0.7592, 0.5222, 5.3676, 1.3282, 2.4445, 0.1737]
 # icons
 [7.6781e-04, 4.8298e-02, 1.0481e-01, 3.6481e-02, 7.8813e-02, 3.3583e-01,  1.9796e-01, 1.1102e-01, 7.4211e-01, 1.2648e+00, 8.0791e+00]
-```
+`
 Il vaut mieux calculer avec la racine carrée et mettre un "clamping" pour éviter les valeurs infinies. Mais cela donne des poids semblables à toutes les classes sauf la classe dominante. On perd de l'information.
-```bash
+`bash
 # formula : 
 weights = 1.0 / torch.sqrt(freqs + 1e-6)
 weights = torch.clamp(weights, max=5.0)
@@ -104,9 +104,9 @@ weights = weights / weights.mean()
 [0.3873, 1.0526, 0.8231, 1.0757, 0.8083, 0.8621, 1.2492, 1.2492, 1.2492, 1.2492, 1.2492, 0.7451]
 # icons
 [0.2228, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777]
-```
+`
 Il vaut mieux utiliser le "effective number of samples". E_n=(1-Beta)^N/(1-Beta) Beta=0.9999, N=nombre de classes, et prendre w_n = 1/E_n.
-```bash
+`bash
 # formula : 
 E_n = (1-Beta)^N/(1-Beta)
 w_n = 1/E_n
@@ -114,21 +114,21 @@ w_n = 1/E_n
 [0.3873, 1.0526, 0.8231, 1.0757, 0.8083, 0.8621, 1.2492, 1.2492, 1.2492, 1.2492, 1.2492, 0.7451]
 # icons
 [0.2228, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777, 1.0777]
-```
+`
 
 tensorboard:
-```bash
+`bash
 tensorboard --logdir runs_cubi --port 6006
-```
+`
 logs:
-```bash
+`bash
 tail -f runs_cubi/train.log
-```
+`
 
 # Visualizing the LMDB database
-```bash
+`bash
 python lmdb_viewer.py
-```
+`
 Then open in the browser: http://localhost:8080/
 
 # training
@@ -166,9 +166,9 @@ Use ReduceLROnPlateau(..., mode="min", factor=0.5, patience=..., threshold=1e-4,
 
 For this CubiCasa setup (long runs, noisy validation curve, segmentation metrics), the safest default is:
 
-```bash
+`bash
 ReduceLROnPlateau(mode="min", factor=0.5, patience=10-20, threshold=1e-4, cooldown=2, min_lr=1e-6)
-```
+`
 
 Why this is a good default:
 - It reacts to real plateaus on validation loss (instead of fixed epoch milestones).
