@@ -4,8 +4,10 @@ import logging
 import json
 import torch
 import torch.nn.functional as F
+from torch import amp
 import numpy as np
 import yaml  # type: ignore[reportMissingModuleSource]
+from contextlib import nullcontext
 from datetime import datetime
 from types import SimpleNamespace
 from tqdm import tqdm
@@ -33,8 +35,8 @@ TRAIN_FULL_CONFIG_DEFAULTS = {
     "resume_from": None,
     "log_path": "runs_cubi/",
     "debug": False,
-    "num_workers": 20,
-    "prefetch_factor": 4,
+    "num_workers": 8,
+    "prefetch_factor": 2,
     "plot_samples": True,
     "scale": True,
 }
@@ -54,6 +56,17 @@ class Cubicasa5kFullTrainer:
         self.tb = FullTrainingTensorBoard(writer, self.input_slice)
         self.logger = logger
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_amp = self.device.type == "cuda"
+        if self.use_amp:
+            self.amp_dtype = (
+                torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            )
+            self.grad_scaler = (
+                None if self.amp_dtype == torch.bfloat16 else amp.GradScaler("cuda")
+            )
+        else:
+            self.amp_dtype = None
+            self.grad_scaler = None
 
     def dataloader_setup(self):
         return build_cubicasa5k_full_dataloaders(self.args, self.device, self.logger)
@@ -71,6 +84,12 @@ class Cubicasa5kFullTrainer:
 
     def optimizer_setup(self):
         return build_optimizer_and_scheduler(self.args, self.model, self.criterion)
+
+    def _amp_autocast(self):
+        """CUDA autocast when AMP is on; no-op context otherwise (safe on CPU)."""
+        if self.use_amp:
+            return amp.autocast("cuda", dtype=self.amp_dtype)
+        return nullcontext()
 
     def save_checkpoint(self, filename, epoch, best_loss=None):
         """Save training checkpoint under log_dir. filename is a basename (e.g. 'model_last_epoch.pkl')."""
@@ -100,6 +119,16 @@ class Cubicasa5kFullTrainer:
         self.optimizer, self.scheduler = self.optimizer_setup()
 
         self.tb.log_args(self.args)
+        if self.use_amp:
+            self.logger.info(
+                "AMP enabled (dtype=%s, GradScaler=%s)",
+                self.amp_dtype,
+                self.grad_scaler is not None,
+            )
+        else:
+            self.logger.info(
+                "AMP disabled (CPU or CUDA unavailable; training in FP32)"
+            )
 
         # ------------------------------------------------------------
         # Training
@@ -140,14 +169,19 @@ class Cubicasa5kFullTrainer:
                 labels = samples["label"].to(
                     self.device, non_blocking=(self.device.type == "cuda")
                 )
-                # outputs are logits: (N, n_output_channels, H, W)
-                outputs = self.model(images)
-                loss = self.criterion(outputs, labels)
+                self.optimizer.zero_grad(set_to_none=True)
+                with self._amp_autocast():
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
                 epoch_train_scalars.append(self.criterion.get_loss_scalars())
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                if self.grad_scaler is not None:
+                    self.grad_scaler.scale(loss).backward()
+                    self.grad_scaler.step(self.optimizer)
+                    self.grad_scaler.update()
+                else:
+                    loss.backward()
+                    self.optimizer.step()
 
             keys = epoch_train_scalars[0].keys()
             train_losses = {
@@ -185,8 +219,9 @@ class Cubicasa5kFullTrainer:
                         self.device, non_blocking=(self.device.type == "cuda")
                     )
 
-                    outputs = self.model(images_val)
-                    loss = self.criterion(outputs, labels_val)
+                    with self._amp_autocast():
+                        outputs = self.model(images_val)
+                        loss = self.criterion(outputs, labels_val)
                     val_scalars.append(self.criterion.get_loss_scalars())
 
                     n_hm = self.input_slice[0]
