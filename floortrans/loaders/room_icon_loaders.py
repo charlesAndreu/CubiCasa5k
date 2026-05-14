@@ -23,6 +23,23 @@ ICON_MINI_MAPPING = {0: 0, 1: 1, 2: 2}  # bg -> 0; window -> 1; door -> 2
 ICON_MINI_DEFAULT_CLASS = 3  # rest -> 3
 
 
+def map_seg_plane_to_mini(
+    plane: torch.Tensor, mapping: dict, default_class: int
+) -> torch.Tensor:
+    """Map full-resolution class ids ``(H, W)`` to mini ids ``(H, W)`` long (same rules as ``get_mini_label``)."""
+    p = plane.round().long()
+    h, w = p.shape
+    out = torch.full(
+        (h, w),
+        default_class,
+        dtype=torch.long,
+        device=p.device,
+    )
+    for k, v in mapping.items():
+        out[p == k] = v
+    return out
+
+
 def build_simple_train_augmentations(args) -> Compose:
     sz = (args.image_size, args.image_size)
     if args.scale:
@@ -146,17 +163,10 @@ class _SimpleSegLMDBDataset(Dataset):
 
     def get_mini_label(self, label: torch.Tensor) -> torch.Tensor:
         """Map full-resolution class ids to mini ids; output shape (1, H, W) like non-mini."""
-        plane = label[0]
-        h, w = plane.shape
-        new_label = torch.full(
-            (h, w),
-            self.mini_default_class,
-            dtype=torch.long,
-            device=plane.device,
+        mapped = map_seg_plane_to_mini(
+            label[0], self.mini_mapping, self.mini_default_class
         )
-        for k, v in self.mini_mapping.items():
-            new_label[plane == k] = v
-        return new_label.unsqueeze(0)
+        return mapped.unsqueeze(0)
 
 
 class RoomLoader(_SimpleSegLMDBDataset):
@@ -233,7 +243,6 @@ class FullLoader(Dataset):
             )
         sample = pickle.loads(blob)
         sample.setdefault("scale", 1.0)
-        sample["label"] = sample["label"].long()
 
         # Geo-augs (RandomCrop / ResizePadded) spatially transform image+label and clip heatmap points.
         # RandomRotations rotates image+label and remaps heatmap channel indices.
@@ -246,6 +255,22 @@ class FullLoader(Dataset):
         image = sample["image"].float()
         image = 2 * (image / 255.0) - 1.0
         label = sample["label"]
+        # map to mini heads used in train_simple.py
+        heatmaps = label[:21]
+        room_mini = map_seg_plane_to_mini(
+            label[21], ROOM_MINI_MAPPING, ROOM_MINI_DEFAULT_CLASS
+        )
+        icon_mini = map_seg_plane_to_mini(
+            label[22], ICON_MINI_MAPPING, ICON_MINI_DEFAULT_CLASS
+        )
+        label = torch.cat(
+            (
+                heatmaps,
+                room_mini.float().unsqueeze(0),
+                icon_mini.float().unsqueeze(0),
+            ),
+            dim=0,
+        )
         return {
             "image": image,  # (3, H, W) in [-1, 1]
             "label": label,  # (23, H, W): [0:21]=Gaussian heatmaps, [21]=room, [22]=icon

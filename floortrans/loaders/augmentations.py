@@ -205,7 +205,7 @@ class DictToTensor(object):
 
         heatmap_tensor = torch.FloatTensor(heatmap_tensor)
 
-        label = torch.cat((heatmap_tensor, label), 0)
+        label = torch.cat((heatmap_tensor, label.float()), 0)
 
         return {"image": image, "label": label}
 
@@ -228,7 +228,7 @@ class DictToTensor(object):
 
         heatmap_tensor = torch.FloatTensor(heatmap_tensor)
 
-        label = torch.cat((heatmap_tensor, label), 0)
+        label = torch.cat((heatmap_tensor, label.float()), 0)
 
         return {"image": image, "label": label}
 

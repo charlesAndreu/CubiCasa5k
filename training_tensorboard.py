@@ -123,6 +123,10 @@ class SimpleTrainingTensorBoard:
 
 class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
 
+    def __init__(self, writer, input_slice=(21, 3, 4)):
+        super().__init__(writer)
+        self.input_slice = tuple(int(x) for x in input_slice)
+
     def log_training_scalars(self, epoch, losses: dict, optimizer):
         if self.writer is None:
             return
@@ -153,3 +157,74 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
         step = 1 + epoch
         self._log_scalar("uncertainty/room_var", uncertainty["room_var"], step)
         self._log_scalar("uncertainty/icon_var", uncertainty["icon_var"], step)
+
+    def log_new_best_val_visualizations(
+        self,
+        epoch,
+        valloader,
+        first_best,
+        model,
+        args,
+        segmentation_map,
+        n_output_channels,
+        device,
+    ):
+        """Log val images / GT / preds for room + icon heads (not the simple single-head layout)."""
+        del n_output_channels  # API parity with ``SimpleTrainingTensorBoard``; splits come from ``input_slice``.
+
+        if self.writer is None or not args.plot_samples:
+            return
+
+        n_hm, n_room, n_icon = self.input_slice
+        room_logit_end = n_hm + n_room
+        room_label_ch = n_hm
+        icon_label_ch = n_hm + 1
+
+        model.eval()
+        step = 1 + epoch
+        cmap = plt.cm.tab20
+
+        for i, samples_val in enumerate(valloader):
+            if i == 4:
+                break
+            with torch.no_grad():
+                images_val = samples_val["image"].to(
+                    device, non_blocking=(device.type == "cuda")
+                )
+                labels_val = samples_val["label"].to(
+                    device, non_blocking=(device.type == "cuda")
+                )
+                if first_best:
+                    self.writer.add_image("Image " + str(i), images_val[0])
+                    for head, ch, vmax in (
+                        ("room", room_label_ch, n_room - 1),
+                        ("icon", icon_label_ch, n_icon - 1),
+                    ):
+                        gt = labels_val[0, ch].detach().cpu().numpy()
+                        fig = plt.figure(figsize=(10, 8))
+                        plot = fig.add_subplot(111)
+                        cax = plot.imshow(gt, vmin=0, vmax=vmax, cmap=cmap)
+                        fig.colorbar(cax)
+                        self.writer.add_figure(
+                            f"Image {i} label/{head}_{segmentation_map}",
+                            fig,
+                            global_step=step,
+                        )
+                        plt.close(fig)
+
+                outputs = model(images_val)
+                for head, slc, vmax in (
+                    ("room", slice(n_hm, room_logit_end), n_room - 1),
+                    ("icon", slice(room_logit_end, room_logit_end + n_icon), n_icon - 1),
+                ):
+                    pred_map = outputs[0, slc].argmax(dim=0).detach().cpu().numpy()
+                    fig = plt.figure(figsize=(18, 12))
+                    plot = fig.add_subplot(111)
+                    cax = plot.imshow(pred_map, vmin=0, vmax=vmax, cmap=cmap)
+                    fig.colorbar(cax)
+                    self.writer.add_figure(
+                        f"Image {i} prediction/{head}_{segmentation_map}",
+                        fig,
+                        global_step=step,
+                    )
+                    plt.close(fig)

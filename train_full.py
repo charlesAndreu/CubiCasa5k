@@ -51,7 +51,7 @@ class Cubicasa5kFullTrainer:
         self.n_output_channels = sum(self.input_slice)
         self.args = args
         self.log_dir = log_dir
-        self.tb = FullTrainingTensorBoard(writer)
+        self.tb = FullTrainingTensorBoard(writer, self.input_slice)
         self.logger = logger
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -190,18 +190,19 @@ class Cubicasa5kFullTrainer:
                     loss = self.criterion(outputs, labels_val)
                     val_scalars.append(self.criterion.get_loss_scalars())
 
-                    room_start = self.input_slice[0]
-                    room_end = room_start + self.input_slice[1]
+                    n_hm = self.input_slice[0]
+                    room_end = n_hm + self.input_slice[1]
                     icon_end = room_end + self.input_slice[2]
 
                     room_pred = (
-                        outputs[0, room_start:room_end]
+                        outputs[0, n_hm:room_end]
                         .argmax(dim=0)
                         .detach()
                         .cpu()
                         .numpy()
                     )
-                    room_gt = labels_val[0, room_start].long().detach().cpu().numpy()
+                    # Stacked label is always (23, H, W): room / icon are single channels 21 and 22.
+                    room_gt = labels_val[0, 21].long().detach().cpu().numpy()
                     running_metrics_room_val.update([room_gt], [room_pred])
 
                     icon_pred = (
@@ -211,7 +212,7 @@ class Cubicasa5kFullTrainer:
                         .cpu()
                         .numpy()
                     )
-                    icon_gt = labels_val[0, room_end].long().detach().cpu().numpy()
+                    icon_gt = labels_val[0, 22].long().detach().cpu().numpy()
                     running_metrics_icon_val.update([icon_gt], [icon_pred])
 
             keys = val_scalars[0].keys()
@@ -276,7 +277,7 @@ class Cubicasa5kFullTrainer:
                     self.model,
                     self.args,
                     "full",
-                    self.input_slice,
+                    self.n_output_channels,
                     self.device,
                 )
 
