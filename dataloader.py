@@ -106,6 +106,7 @@ def build_cubicasa5k_full_dataloaders(args, device, logger):
     train_aug = build_full_train_augmentations(args)
     val_aug = build_full_val_augmentations(args)
     logger.info("Loading full data (heatmaps + room + icon)...")
+    logger.info("Train at %sx%s; validation at native LMDB resolution", args.image_size, args.image_size)
     train_set = FullLoader(
         args.data_path, "train.txt", lmdb_env, augmentations=train_aug
     )
@@ -148,33 +149,8 @@ def build_cubicasa5k_full_dataloaders(args, device, logger):
 
 
 def build_cubicasa5k_full_eval_dataloaders(args, device):
-    """Open LMDB, build full (heatmap + room + icon) test dataset and DataLoader."""
-    root = args.data_path.rstrip(os.sep)
-    lmdb_path = os.path.join(root, "cubi_lmdb")
-    lmdb_env = lmdb.open(
-        lmdb_path,
-        readonly=True,
-        max_readers=16,
-        lock=False,
-        readahead=True,
-        meminit=False,
-    )
-    eval_aug = build_full_val_augmentations(args)  # resize to image_size (256) + DictToTensor
-    print("LMDB full eval loader: FullLoader (heatmaps + room + icon)")
-    test_set = FullLoader(args.data_path, "test.txt", lmdb_env, augmentations=eval_aug)
-
-    num_workers = max(0, args.num_workers)
-    persistent_workers = num_workers > 0
-    pin_memory = device.type == "cuda"
-
-    return DataLoader(
-        test_set,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers,
-    )
+    """Full test loader at native LMDB resolution (DictToTensor only)."""
+    return build_cubicasa5k_full_eval_dataloaders_native_res(args, device)
 
 
 def build_cubicasa5k_full_eval_dataloaders_native_res(args, device):
@@ -193,7 +169,7 @@ def build_cubicasa5k_full_eval_dataloaders_native_res(args, device):
         readahead=True,
         meminit=False,
     )
-    eval_aug = Compose([DictToTensor()])
+    eval_aug = build_full_val_augmentations(args)
     print("LMDB full eval loader (native res): FullLoader (heatmaps + room + icon)")
     test_set = FullLoader(args.data_path, "test.txt", lmdb_env, augmentations=eval_aug)
 

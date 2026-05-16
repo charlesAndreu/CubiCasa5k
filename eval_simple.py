@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import cv2
 import matplotlib
+import matplotlib.colors as mcolors
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -57,19 +58,53 @@ def _save_entropy_heatmap_png(path, entropy_hw, title):
     plt.close(fig)
 
 
-def _save_segmentation_map_png(path, seg_hw, n_classes):
+def _tab20_segmentation_colors(n_classes):
+    """RGB colors used by _save_segmentation_map_png for class ids 0..n_classes-1."""
+    if n_classes <= 1:
+        return [plt.cm.tab20(0.0)]
+    cmap = plt.cm.tab20
+    return [cmap(i / (n_classes - 1)) for i in range(n_classes)]
+
+
+def _save_segmentation_map_png(path, seg_hw, n_classes, cmap=None):
     fig, ax = plt.subplots(figsize=(8, 8))
+    if cmap is None:
+        cmap = plt.cm.tab20
     ax.imshow(
         seg_hw,
         vmin=0,
         vmax=n_classes - 1,
-        cmap=plt.cm.tab20,
+        cmap=cmap,
         interpolation="nearest",
     )
     ax.axis("off")
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def _save_combined_segmentation_map_png(
+    path,
+    combined_hw,
+    n_combined_classes,
+    room_class_colors,
+    icon_class_colors,
+    window_class,
+    door_class,
+):
+    """
+    Combined map (outside / walls / inside / windows / doors) using the same
+    tab20 colors as the separate room and icon segmentation PNGs.
+    """
+    colors = [
+        room_class_colors[0],
+        room_class_colors[1],
+        room_class_colors[2],
+        icon_class_colors[window_class],
+        icon_class_colors[door_class],
+    ]
+    cmap = mcolors.ListedColormap(colors[:n_combined_classes])
+    _save_segmentation_map_png(path, combined_hw, n_combined_classes, cmap=cmap)
 
 
 def save_eval_entropy_heatmap(out_dir, idx, logits_chw):

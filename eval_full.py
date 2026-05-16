@@ -6,12 +6,12 @@ Mini room layout (3 classes): 0 = outside, 1 = walls, 2 = inside
 Mini icon layout (4 classes): 0 = empty,   1 = window, 2 = door, 3 = others
 
 Outputs per run (saved under <run_dir>/):
-  * eval.json — raw and post-processed metrics for both heads + mean entropies
-  * confusion_{room|icon}_{raw|postproc}.png / _raw.json
-  * eval_samples_seed42/sample_XXXXX_*.png — 3 random test samples:
-      input, room/icon argmax, wall mask, room/icon entropy heatmaps,
-      post-processed room/icon segmentation, 5-class combined map
-      (outside / walls / inside / windows / doors).
+  * eval.csv — 12 rows (3 post-processing thresholds × 4 modes):
+      no rotation | no rotation + post_processing |
+      rotation (4× TTA mean) | rotation + post_processing
+  * eval.json — same metrics in JSON form
+  * confusion_{room|icon}_{raw|postproc}.png / _raw.json (no-TTA raw + TTA @ 0.35)
+  * eval_samples_seed42/ — 3 random samples (TTA, postproc threshold 0.35)
 
 Test images are processed at native (LMDB) resolution. The fully-convolutional
 Furukawa model accepts arbitrary sizes; predictions are bilinearly resampled
@@ -19,6 +19,7 @@ back to the ground-truth resolution via post_prosessing.split_prediction
 before metrics and post-processing run.
 """
 
+import csv
 import json
 import logging
 import math
@@ -30,6 +31,7 @@ import cv2
 import matplotlib
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 matplotlib.use("Agg")
@@ -37,13 +39,16 @@ import matplotlib.pyplot as plt
 
 from dataloader import build_cubicasa5k_full_eval_dataloaders_native_res
 from eval_simple import (
+    _save_combined_segmentation_map_png,
     _save_entropy_heatmap_png,
     _save_segmentation_map_png,
+    _tab20_segmentation_colors,
     _tensor_to_bgr_uint8,
     _to_jsonable,
     save_confusion_matrix_artifacts,
 )
 from floortrans import post_prosessing
+from floortrans.loaders.augmentations import RotateNTurns
 from floortrans.metrics import polygons_to_tensor, runningScore
 from floortrans.post_prosessing import (
     get_icon_polygon,
@@ -69,7 +74,17 @@ WINDOW_CLASS = 1
 DOOR_CLASS = 2
 COMBINED_CLASSES = 5  # 0=outside, 1=walls, 2=inside, 3=windows, 4=doors
 
-POSTPROC_THRESHOLD = 0.4
+# Post-processing peak thresholds (see diagnose_heatmaps.py).
+EVAL_THRESHOLDS = [0.30, 0.35, 0.40]
+VIS_POSTPROC_THRESHOLD = 0.35
+ROTATIONS = [(0, 0), (1, -1), (2, 2), (-1, 1)]
+
+CSV_MODES = (
+    "no_rotation",
+    "no_rotation + post_processing",
+    "rotation",
+    "rotation + post_processing",
+)
 
 
 def get_polygons_mini(predictions, threshold, all_opening_types):
@@ -168,6 +183,169 @@ def build_combined_map(pol_rooms, pol_icons):
     return combined
 
 
+def _resize_pred(pred, target_hw):
+    if pred.shape[-2:] == target_hw:
+        return pred
+    return F.interpolate(
+        pred, size=target_hw, mode="bilinear", align_corners=True
+    )
+
+
+def predict_no_rotation(model, images, target_hw):
+    """Single forward; returns (1, C, H, W) on device."""
+    pred = model(images)
+    return _resize_pred(pred, target_hw)
+
+
+def predict_with_rotation_tta(model, images, target_hw, n_channels, device):
+    """4-rotation TTA mean, matching floortrans.metrics.get_evaluation_tensors."""
+    rot = RotateNTurns()
+    h, w = target_hw
+    acc = torch.zeros(len(ROTATIONS), n_channels, h, w, device=device)
+    for i, (forward, back) in enumerate(ROTATIONS):
+        rot_img = rot(images, "tensor", forward)
+        pred = model(rot_img)
+        pred = rot(pred, "tensor", back)
+        pred = rot(pred, "points", back)
+        pred = _resize_pred(pred, (h, w))
+        acc[i] = pred[0]
+    return acc.mean(dim=0, keepdim=True)
+
+
+def run_postproc_mini(heatmaps, rooms, icons, full_res_shape, threshold):
+    """Polygon post-processing; returns (pol_rooms, pol_icons) or (None, None)."""
+    polygons, types, room_polygons, room_types = get_polygons_mini(
+        (heatmaps, rooms.copy(), icons),
+        threshold=threshold,
+        all_opening_types=[WINDOW_CLASS, DOOR_CLASS],
+    )
+    predicted_classes = polygons_to_tensor(
+        polygons,
+        types,
+        room_polygons,
+        room_types,
+        full_res_shape,
+        split=[N_ROOM_CLASSES, N_ICON_CLASSES],
+    )
+    pol_rooms = np.argmax(predicted_classes[:N_ROOM_CLASSES], axis=0).astype(
+        np.int64
+    )
+    pol_icons = np.argmax(predicted_classes[N_ROOM_CLASSES:], axis=0).astype(
+        np.int64
+    )
+    return pol_rooms, pol_icons
+
+
+def _fmt_cell(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    if isinstance(value, float):
+        return f"{value:.8f}"
+    return str(value)
+
+
+def _metrics_cells(score, class_iou, n_classes):
+    """Flatten runningScore output into CSV column values (or empty strings)."""
+    if score is None:
+        return [""] * (4 + n_classes + 4 + n_classes)
+    cells = [
+        score["Overall Acc"],
+        score["Mean Acc"],
+        score["FreqW Acc"],
+        score["Mean IoU"],
+    ]
+    cls_iou = class_iou["Class IoU"]
+    for c in range(n_classes):
+        cells.append(cls_iou[str(c)])
+    return cells
+
+
+def write_eval_csv(path, rows):
+    header = [
+        "threshold",
+        "mode",
+        "room_overall_acc",
+        "room_mean_acc",
+        "room_freqw_acc",
+        "room_mean_iou",
+        "room_iou_0",
+        "room_iou_1",
+        "room_iou_2",
+        "icon_overall_acc",
+        "icon_mean_acc",
+        "icon_freqw_acc",
+        "icon_mean_iou",
+        "icon_iou_0",
+        "icon_iou_1",
+        "icon_iou_2",
+        "icon_iou_3",
+        "mean_room_entropy",
+        "mean_icon_entropy",
+        "post_failed",
+    ]
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
+def build_csv_rows(
+    thresholds,
+    running_room_raw_no_tta,
+    running_icon_raw_no_tta,
+    running_room_raw_tta,
+    running_icon_raw_tta,
+    running_room_pp_no_tta,
+    running_icon_pp_no_tta,
+    running_room_pp_tta,
+    running_icon_pp_tta,
+    post_failed_no_tta,
+    post_failed_tta,
+    mean_room_entropy_no_tta,
+    mean_room_entropy_tta,
+    mean_icon_entropy_no_tta,
+    mean_icon_entropy_tta,
+):
+    rows = []
+    for thr in thresholds:
+        for mode in CSV_MODES:
+            use_pp = "post_processing" in mode
+            use_tta = mode.startswith("rotation")
+
+            if use_pp:
+                if use_tta:
+                    rr, ir = running_room_pp_tta[thr], running_icon_pp_tta[thr]
+                    pf = post_failed_tta[thr]
+                else:
+                    rr, ir = running_room_pp_no_tta[thr], running_icon_pp_no_tta[thr]
+                    pf = post_failed_no_tta[thr]
+                room_score, room_iou = rr.get_scores()
+                icon_score, icon_iou = ir.get_scores()
+                ent_r = ent_i = ""
+            else:
+                if use_tta:
+                    rr, ir = running_room_raw_tta, running_icon_raw_tta
+                    ent_r, ent_i = mean_room_entropy_tta, mean_icon_entropy_tta
+                else:
+                    rr, ir = running_room_raw_no_tta, running_icon_raw_no_tta
+                    ent_r, ent_i = mean_room_entropy_no_tta, mean_icon_entropy_no_tta
+                room_score, room_iou = rr.get_scores()
+                icon_score, icon_iou = ir.get_scores()
+                pf = ""
+
+            row = [
+                f"{thr:.2f}",
+                mode,
+                *_metrics_cells(room_score, room_iou, N_ROOM_CLASSES),
+                *_metrics_cells(icon_score, icon_iou, N_ICON_CLASSES),
+                _fmt_cell(ent_r),
+                _fmt_cell(ent_i),
+                pf if pf != "" else "",
+            ]
+            rows.append(row)
+    return rows
+
+
 def _entropy_from_probs(probs_chw, n_classes):
     """Shannon entropy normalized to [0, 1] from already-softmaxed probs (C, H, W)."""
     p = torch.as_tensor(probs_chw, dtype=torch.float32).clamp(min=1e-12)
@@ -230,10 +408,16 @@ def save_sample_pngs(
             N_ICON_CLASSES,
         )
     if combined is not None:
-        _save_segmentation_map_png(
+        room_colors = _tab20_segmentation_colors(N_ROOM_CLASSES)
+        icon_colors = _tab20_segmentation_colors(N_ICON_CLASSES)
+        _save_combined_segmentation_map_png(
             os.path.join(out_dir, f"{stem}_combined_postproc.png"),
             combined,
             COMBINED_CLASSES,
+            room_colors,
+            icon_colors,
+            WINDOW_CLASS,
+            DOOR_CLASS,
         )
 
 
@@ -256,11 +440,20 @@ class FullSegEvaluator:
         testloader = self.dataloader_setup()
         self.model = self.model_setup()
         self.model.eval()
+        n_channels = sum(self.input_slice)
 
-        running_room_raw = runningScore(N_ROOM_CLASSES)
-        running_icon_raw = runningScore(N_ICON_CLASSES)
-        running_room_pp = runningScore(N_ROOM_CLASSES)
-        running_icon_pp = runningScore(N_ICON_CLASSES)
+        running_room_raw_no_tta = runningScore(N_ROOM_CLASSES)
+        running_icon_raw_no_tta = runningScore(N_ICON_CLASSES)
+        running_room_raw_tta = runningScore(N_ROOM_CLASSES)
+        running_icon_raw_tta = runningScore(N_ICON_CLASSES)
+
+        running_room_pp_no_tta = {t: runningScore(N_ROOM_CLASSES) for t in EVAL_THRESHOLDS}
+        running_icon_pp_no_tta = {t: runningScore(N_ICON_CLASSES) for t in EVAL_THRESHOLDS}
+        running_room_pp_tta = {t: runningScore(N_ROOM_CLASSES) for t in EVAL_THRESHOLDS}
+        running_icon_pp_tta = {t: runningScore(N_ICON_CLASSES) for t in EVAL_THRESHOLDS}
+
+        post_failed_no_tta = {t: 0 for t in EVAL_THRESHOLDS}
+        post_failed_tta = {t: 0 for t in EVAL_THRESHOLDS}
 
         n_samples = len(testloader.dataset)
         rng = np.random.default_rng(42)
@@ -269,10 +462,9 @@ class FullSegEvaluator:
         vis_dir = os.path.join(results_dir, "eval_samples_seed42")
         os.makedirs(vis_dir, exist_ok=True)
 
-        entropy_room_sum = 0.0
-        entropy_icon_sum = 0.0
+        entropy_room_no_tta = entropy_icon_no_tta = 0.0
+        entropy_room_tta = entropy_icon_tta = 0.0
         entropy_pixel_count = 0
-        post_failed = 0
 
         with torch.no_grad():
             global_idx = 0
@@ -290,110 +482,139 @@ class FullSegEvaluator:
                 full_h, full_w = labels.shape[2], labels.shape[3]
                 full_res_shape = (full_h, full_w)
 
-                outputs = self.model(images)  # (1, 28, h_out, w_out)
-
-                # CubiCasa5KFurukawa (full) is now built with n_heatmap_channels=21,
-                # so the forward pass already applies sigmoid to the first 21
-                # channels. Pass outputs straight through to split_prediction.
-                #
-                # WARNING: older checkpoints trained when n_heatmap_channels was 0
-                # were optimized as raw MSE without sigmoid; running them through
-                # this model class will sigmoid-squash already-small raw outputs
-                # (baseline raw 0 → 0.5 ≥ POSTPROC_THRESHOLD), swamping
-                # post-processing. For those checkpoints, retrain (preferred) or
-                # temporarily revert n_heatmap_channels to 0 in model.py.
-                outputs_cpu = outputs.detach().cpu().float()
-
-                # bilinear-upsample to full resolution + softmax over rooms & icons
-                heatmaps, rooms, icons = post_prosessing.split_prediction(
-                    outputs_cpu, full_res_shape, self.input_slice
+                outputs_no_tta = predict_no_rotation(
+                    self.model, images, full_res_shape
                 )
-
-                rooms_seg = np.argmax(rooms, axis=0)
-                icons_seg = np.argmax(icons, axis=0)
+                outputs_tta = predict_with_rotation_tta(
+                    self.model,
+                    images,
+                    full_res_shape,
+                    n_channels,
+                    self.device,
+                )
 
                 rooms_gt = labels[0, N_HEATMAPS].long().numpy()
                 icons_gt = labels[0, N_HEATMAPS + 1].long().numpy()
 
-                running_room_raw.update([rooms_gt], [rooms_seg])
-                running_icon_raw.update([icons_gt], [icons_seg])
-
-                room_entropy = _entropy_from_probs(rooms, N_ROOM_CLASSES)
-                icon_entropy = _entropy_from_probs(icons, N_ICON_CLASSES)
-                entropy_room_sum += float(room_entropy.sum().item())
-                entropy_icon_sum += float(icon_entropy.sum().item())
-                entropy_pixel_count += room_entropy.numel()
-
-                pol_rooms = pol_icons = combined = None
-                try:
-                    polygons, types, room_polygons, room_types = get_polygons_mini(
-                        (heatmaps, rooms.copy(), icons),
-                        threshold=POSTPROC_THRESHOLD,
-                        all_opening_types=[WINDOW_CLASS, DOOR_CLASS],
+                preds = (
+                    ("no_tta", outputs_no_tta),
+                    ("tta", outputs_tta),
+                )
+                for tag, outputs in preds:
+                    outputs_cpu = outputs.detach().cpu().float()
+                    heatmaps, rooms, icons = post_prosessing.split_prediction(
+                        outputs_cpu, full_res_shape, self.input_slice
                     )
-                    predicted_classes = polygons_to_tensor(
-                        polygons,
-                        types,
-                        room_polygons,
-                        room_types,
-                        full_res_shape,
-                        split=[N_ROOM_CLASSES, N_ICON_CLASSES],
-                    )
-                    pol_rooms = np.argmax(
-                        predicted_classes[:N_ROOM_CLASSES], axis=0
-                    ).astype(np.int64)
-                    pol_icons = np.argmax(
-                        predicted_classes[N_ROOM_CLASSES:], axis=0
-                    ).astype(np.int64)
-                    running_room_pp.update([rooms_gt], [pol_rooms])
-                    running_icon_pp.update([icons_gt], [pol_icons])
-                    combined = build_combined_map(pol_rooms, pol_icons)
-                except Exception as e:
-                    post_failed += 1
-                    self.logger.warning(
-                        "Post-processing failed for sample %d: %s", global_idx, e
-                    )
+                    rooms_seg = np.argmax(rooms, axis=0)
+                    icons_seg = np.argmax(icons, axis=0)
 
-                if global_idx in vis_indices:
-                    save_sample_pngs(
-                        vis_dir,
-                        global_idx,
-                        images[0],
-                        rooms_seg,
-                        icons_seg,
-                        room_entropy.cpu().numpy(),
-                        icon_entropy.cpu().numpy(),
-                        pol_rooms,
-                        pol_icons,
-                        combined,
-                    )
+                    if tag == "no_tta":
+                        running_room_raw_no_tta.update([rooms_gt], [rooms_seg])
+                        running_icon_raw_no_tta.update([icons_gt], [icons_seg])
+                        room_ent = _entropy_from_probs(rooms, N_ROOM_CLASSES)
+                        icon_ent = _entropy_from_probs(icons, N_ICON_CLASSES)
+                        entropy_room_no_tta += float(room_ent.sum().item())
+                        entropy_icon_no_tta += float(icon_ent.sum().item())
+                    else:
+                        running_room_raw_tta.update([rooms_gt], [rooms_seg])
+                        running_icon_raw_tta.update([icons_gt], [icons_seg])
+                        room_ent = _entropy_from_probs(rooms, N_ROOM_CLASSES)
+                        icon_ent = _entropy_from_probs(icons, N_ICON_CLASSES)
+                        entropy_room_tta += float(room_ent.sum().item())
+                        entropy_icon_tta += float(icon_ent.sum().item())
 
+                    pp_room = running_room_pp_no_tta if tag == "no_tta" else running_room_pp_tta
+                    pp_icon = running_icon_pp_no_tta if tag == "no_tta" else running_icon_pp_tta
+                    pf = post_failed_no_tta if tag == "no_tta" else post_failed_tta
+
+                    for thr in EVAL_THRESHOLDS:
+                        try:
+                            pol_rooms, pol_icons = run_postproc_mini(
+                                heatmaps, rooms, icons, full_res_shape, thr
+                            )
+                            pp_room[thr].update([rooms_gt], [pol_rooms])
+                            pp_icon[thr].update([icons_gt], [pol_icons])
+                        except Exception as e:
+                            pf[thr] += 1
+                            self.logger.warning(
+                                "Post-processing failed sample %d (%s thr=%.2f): %s",
+                                global_idx,
+                                tag,
+                                thr,
+                                e,
+                            )
+                            pol_rooms = pol_icons = None
+
+                        if (
+                            global_idx in vis_indices
+                            and tag == "tta"
+                            and thr == VIS_POSTPROC_THRESHOLD
+                        ):
+                            combined = (
+                                build_combined_map(pol_rooms, pol_icons)
+                                if pol_rooms is not None
+                                else None
+                            )
+                            save_sample_pngs(
+                                vis_dir,
+                                global_idx,
+                                images[0],
+                                rooms_seg,
+                                icons_seg,
+                                room_ent.cpu().numpy(),
+                                icon_ent.cpu().numpy(),
+                                pol_rooms,
+                                pol_icons,
+                                combined,
+                            )
+
+                entropy_pixel_count += room_ent.numel()
                 global_idx += 1
 
-        room_raw_score, room_raw_iou = running_room_raw.get_scores()
-        icon_raw_score, icon_raw_iou = running_icon_raw.get_scores()
-        room_pp_score, room_pp_iou = running_room_pp.get_scores()
-        icon_pp_score, icon_pp_iou = running_icon_pp.get_scores()
-
         denom = max(1, entropy_pixel_count)
+        csv_rows = build_csv_rows(
+            EVAL_THRESHOLDS,
+            running_room_raw_no_tta,
+            running_icon_raw_no_tta,
+            running_room_raw_tta,
+            running_icon_raw_tta,
+            running_room_pp_no_tta,
+            running_icon_pp_no_tta,
+            running_room_pp_tta,
+            running_icon_pp_tta,
+            post_failed_no_tta,
+            post_failed_tta,
+            entropy_room_no_tta / denom,
+            entropy_room_tta / denom,
+            entropy_icon_no_tta / denom,
+            entropy_icon_tta / denom,
+        )
+
+        vis_thr = VIS_POSTPROC_THRESHOLD
         return {
-            "room_raw_score": room_raw_score,
-            "room_raw_class_iou": room_raw_iou,
-            "icon_raw_score": icon_raw_score,
-            "icon_raw_class_iou": icon_raw_iou,
-            "room_postproc_score": room_pp_score,
-            "room_postproc_class_iou": room_pp_iou,
-            "icon_postproc_score": icon_pp_score,
-            "icon_postproc_class_iou": icon_pp_iou,
-            "mean_room_entropy_all_classes": entropy_room_sum / denom,
-            "mean_icon_entropy_all_classes": entropy_icon_sum / denom,
-            "confusion_room_raw": running_room_raw.confusion_matrix.copy(),
-            "confusion_icon_raw": running_icon_raw.confusion_matrix.copy(),
-            "confusion_room_postproc": running_room_pp.confusion_matrix.copy(),
-            "confusion_icon_postproc": running_icon_pp.confusion_matrix.copy(),
+            "csv_rows": csv_rows,
             "n_samples": n_samples,
-            "post_failed": post_failed,
             "vis_dir": vis_dir,
+            "confusion_room_raw": running_room_raw_no_tta.confusion_matrix.copy(),
+            "confusion_icon_raw": running_icon_raw_no_tta.confusion_matrix.copy(),
+            "confusion_room_raw_tta": running_room_raw_tta.confusion_matrix.copy(),
+            "confusion_icon_raw_tta": running_icon_raw_tta.confusion_matrix.copy(),
+            "confusion_room_postproc": running_room_pp_tta[vis_thr].confusion_matrix.copy(),
+            "confusion_icon_postproc": running_icon_pp_tta[vis_thr].confusion_matrix.copy(),
+            "running_room_raw_no_tta": running_room_raw_no_tta,
+            "running_icon_raw_no_tta": running_icon_raw_no_tta,
+            "running_room_raw_tta": running_room_raw_tta,
+            "running_icon_raw_tta": running_icon_raw_tta,
+            "running_room_pp_no_tta": running_room_pp_no_tta,
+            "running_icon_pp_no_tta": running_icon_pp_no_tta,
+            "running_room_pp_tta": running_room_pp_tta,
+            "running_icon_pp_tta": running_icon_pp_tta,
+            "post_failed_no_tta": post_failed_no_tta,
+            "post_failed_tta": post_failed_tta,
+            "mean_room_entropy_no_tta": entropy_room_no_tta / denom,
+            "mean_icon_entropy_no_tta": entropy_icon_no_tta / denom,
+            "mean_room_entropy_tta": entropy_room_tta / denom,
+            "mean_icon_entropy_tta": entropy_icon_tta / denom,
         }
 
 
@@ -412,6 +633,14 @@ def load_eval_args(run_dir):
     return SimpleNamespace(**merged)
 
 
+def _json_block(runner):
+    score, class_iou = runner.get_scores()
+    return {
+        "score": _to_jsonable(score),
+        "class_iou": _to_jsonable(class_iou),
+    }
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise ValueError("Usage: python eval_full.py <run_dir>")
@@ -421,56 +650,75 @@ if __name__ == "__main__":
     evaluator = FullSegEvaluator(args)
     results = evaluator.evaluate(results_dir=run_dir)
 
+    csv_path = os.path.join(run_dir, "eval.csv")
+    write_eval_csv(csv_path, results["csv_rows"])
+
     cm_paths = {}
     for stem, cm in [
         ("confusion_room_raw", results["confusion_room_raw"]),
         ("confusion_icon_raw", results["confusion_icon_raw"]),
+        ("confusion_room_raw_tta", results["confusion_room_raw_tta"]),
+        ("confusion_icon_raw_tta", results["confusion_icon_raw_tta"]),
         ("confusion_room_postproc", results["confusion_room_postproc"]),
         ("confusion_icon_postproc", results["confusion_icon_postproc"]),
     ]:
         img_path, raw_path = save_confusion_matrix_artifacts(run_dir, cm, stem=stem)
         cm_paths[stem] = (img_path, raw_path)
 
+    vis_thr = VIS_POSTPROC_THRESHOLD
+    json_rows = []
+    for thr, mode in [
+        (t, m)
+        for t in EVAL_THRESHOLDS
+        for m in CSV_MODES
+    ]:
+        use_pp = "post_processing" in mode
+        use_tta = mode.startswith("rotation")
+        entry = {"threshold": thr, "mode": mode}
+        if use_pp:
+            if use_tta:
+                entry["room"] = _json_block(results["running_room_pp_tta"][thr])
+                entry["icon"] = _json_block(results["running_icon_pp_tta"][thr])
+                entry["post_failed"] = results["post_failed_tta"][thr]
+            else:
+                entry["room"] = _json_block(results["running_room_pp_no_tta"][thr])
+                entry["icon"] = _json_block(results["running_icon_pp_no_tta"][thr])
+                entry["post_failed"] = results["post_failed_no_tta"][thr]
+        else:
+            if use_tta:
+                entry["room"] = _json_block(results["running_room_raw_tta"])
+                entry["icon"] = _json_block(results["running_icon_raw_tta"])
+                entry["mean_room_entropy_all_classes"] = results[
+                    "mean_room_entropy_tta"
+                ]
+                entry["mean_icon_entropy_all_classes"] = results[
+                    "mean_icon_entropy_tta"
+                ]
+            else:
+                entry["room"] = _json_block(results["running_room_raw_no_tta"])
+                entry["icon"] = _json_block(results["running_icon_raw_no_tta"])
+                entry["mean_room_entropy_all_classes"] = results[
+                    "mean_room_entropy_no_tta"
+                ]
+                entry["mean_icon_entropy_all_classes"] = results[
+                    "mean_icon_entropy_no_tta"
+                ]
+        json_rows.append(entry)
+
     json_payload = {
-        "room_raw": {
-            "score": _to_jsonable(results["room_raw_score"]),
-            "class_iou": _to_jsonable(results["room_raw_class_iou"]),
-            "mean_entropy_all_classes": results["mean_room_entropy_all_classes"],
-        },
-        "icon_raw": {
-            "score": _to_jsonable(results["icon_raw_score"]),
-            "class_iou": _to_jsonable(results["icon_raw_class_iou"]),
-            "mean_entropy_all_classes": results["mean_icon_entropy_all_classes"],
-        },
-        "room_postproc": {
-            "score": _to_jsonable(results["room_postproc_score"]),
-            "class_iou": _to_jsonable(results["room_postproc_class_iou"]),
-        },
-        "icon_postproc": {
-            "score": _to_jsonable(results["icon_postproc_score"]),
-            "class_iou": _to_jsonable(results["icon_postproc_class_iou"]),
-        },
+        "thresholds": EVAL_THRESHOLDS,
+        "modes": list(CSV_MODES),
+        "rows": json_rows,
         "n_samples": results["n_samples"],
-        "post_failed": results["post_failed"],
+        "vis_postproc_threshold": vis_thr,
     }
 
     output_path = os.path.join(run_dir, "eval.json")
     with open(output_path, "w") as f:
         json.dump(json_payload, f, indent=2)
 
+    print(f"Saved evaluation CSV to {csv_path} ({len(results['csv_rows'])} rows)")
     print(f"Saved evaluation results to {output_path}")
     for stem, (img_path, raw_path) in cm_paths.items():
         print(f"  {stem}: {img_path}, {raw_path}")
-    print(
-        f"Mean room entropy (3 classes): "
-        f"{results['mean_room_entropy_all_classes']:.6f}"
-    )
-    print(
-        f"Mean icon entropy (4 classes): "
-        f"{results['mean_icon_entropy_all_classes']:.6f}"
-    )
-    print(
-        f"Post-processing failures: "
-        f"{results['post_failed']}/{results['n_samples']}"
-    )
     print(f"Saved eval samples under {results['vis_dir']}")

@@ -42,6 +42,22 @@ TRAIN_FULL_CONFIG_DEFAULTS = {
 }
 
 
+def _seg_argmax_at_label_size(logits_chw, label_hw):
+    """
+    Argmax segmentation logits on the label grid (native resolution).
+    The hourglass head can be 1–2 px smaller/larger than the input; upsample
+    logits with bilinear (same idea as split_prediction), not the GT image.
+    """
+    if logits_chw.shape[-2:] != label_hw:
+        logits_chw = F.interpolate(
+            logits_chw.unsqueeze(0),
+            size=label_hw,
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+    return logits_chw.argmax(dim=0).detach().cpu().numpy()
+
+
 class Cubicasa5kFullTrainer:
 
     def __init__(self, args, log_dir, writer, logger):
@@ -227,24 +243,16 @@ class Cubicasa5kFullTrainer:
                     n_hm = self.input_slice[0]
                     room_end = n_hm + self.input_slice[1]
                     icon_end = room_end + self.input_slice[2]
+                    label_hw = (labels_val.shape[2], labels_val.shape[3])
 
-                    room_pred = (
-                        outputs[0, n_hm:room_end]
-                        .argmax(dim=0)
-                        .detach()
-                        .cpu()
-                        .numpy()
+                    room_pred = _seg_argmax_at_label_size(
+                        outputs[0, n_hm:room_end], label_hw
                     )
-                    # Stacked label is always (23, H, W): room / icon are single channels 21 and 22.
                     room_gt = labels_val[0, 21].long().detach().cpu().numpy()
                     running_metrics_room_val.update([room_gt], [room_pred])
 
-                    icon_pred = (
-                        outputs[0, room_end:icon_end]
-                        .argmax(dim=0)
-                        .detach()
-                        .cpu()
-                        .numpy()
+                    icon_pred = _seg_argmax_at_label_size(
+                        outputs[0, room_end:icon_end], label_hw
                     )
                     icon_gt = labels_val[0, 22].long().detach().cpu().numpy()
                     running_metrics_icon_val.update([icon_gt], [icon_pred])

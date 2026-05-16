@@ -98,14 +98,8 @@ def build_full_train_augmentations(args) -> Compose:
 
 
 def build_full_val_augmentations(args) -> Compose:
-    """Resize/pad like build_simple_val_augmentations, then DictToTensor (legacy val uses tensorize only)."""
-    sz = (args.image_size, args.image_size)
-    return Compose(
-        [
-            ResizePaddedTorch((0, 0), data_format="dict", size=sz),
-            DictToTensor(),
-        ]
-    )
+    """Native LMDB resolution at val/test (DictToTensor only; no resize/pad)."""
+    return Compose([DictToTensor()])
 
 
 class _SimpleSegLMDBDataset(Dataset):
