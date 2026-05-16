@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-RUNS_DIR = ROOT / "runs_cubi"
-OUTPUT_CSV = ROOT / "training.csv"
+RUNS_DIR = ROOT / "runs_cubi_2"
+OUTPUT_CSV = ROOT / "training_2.csv"
 
 
 def read_existing_rows(csv_path: Path):
@@ -19,9 +19,7 @@ def read_existing_rows(csv_path: Path):
         fieldnames = reader.fieldnames or []
 
     existing_folders = {
-        row.get("folder_name", "")
-        for row in existing_rows
-        if row.get("folder_name")
+        row.get("folder_name", "") for row in existing_rows if row.get("folder_name")
     }
     return existing_rows, existing_folders, fieldnames
 
@@ -99,11 +97,15 @@ def main():
     if not RUNS_DIR.exists() or not RUNS_DIR.is_dir():
         raise FileNotFoundError(f"Missing runs directory: {RUNS_DIR}")
 
-    existing_rows, existing_folders, existing_fieldnames = read_existing_rows(OUTPUT_CSV)
+    existing_rows, existing_folders, existing_fieldnames = read_existing_rows(
+        OUTPUT_CSV
+    )
     new_rows, new_keys = load_run_rows(RUNS_DIR, existing_folders)
 
     all_rows = existing_rows + new_rows
-    fieldnames = build_fieldnames(existing_fieldnames, existing_rows, new_rows, new_keys)
+    fieldnames = build_fieldnames(
+        existing_fieldnames, existing_rows, new_rows, new_keys
+    )
     all_rows = normalize_rows(all_rows, fieldnames)
 
     with OUTPUT_CSV.open("w", newline="", encoding="utf-8") as f:
