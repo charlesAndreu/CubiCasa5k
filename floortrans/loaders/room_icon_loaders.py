@@ -218,7 +218,7 @@ class IconLoader(_SimpleSegLMDBDataset):
 
 
 class FullLoader(Dataset):
-    """Full loader (room + icon + heatmaps)."""
+    """Full loader (heatmaps + room + icon)."""
 
     def __init__(self, data_path: str, txt_file: str, lmdb_env, augmentations):
         self.data_path = data_path.rstrip(os.sep) + os.sep

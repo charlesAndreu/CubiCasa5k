@@ -37,18 +37,25 @@ class CubiCasa5KFurukawa(hg_furukawa_original):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         segmentation_map = getattr(args, "segmentation_map", None)
         if segmentation_map is None:
-            self.n_out = (
-                3 + 4 + 21
-            )  # 3 room classes, 4 icon classes, 21 heatmap classes
+            # train_full: 21 heatmap channels (sigmoid) + 3 room logits + 4 icon logits
+            self.n_out = 21 + 3 + 4
+            n_heatmap_channels = 21
             logger.info(
-                f"Using furukawa model with {self.n_out} channels for room + icon + heatmaps"
+                f"Using furukawa model with {self.n_out} channels for heatmaps + room + icon"
+                f" (n_heatmap_channels={n_heatmap_channels}, sigmoid on heatmap logits)"
             )
         else:
+            # train_simple: single segmentation head, all channels are class logits
+            # → no sigmoid (cross-entropy is applied on raw logits)
             self.n_out = n_segmentation_classes(segmentation_map)
+            n_heatmap_channels = 0
             logger.info(
                 f"Using furukawa model with {self.n_out} channels for {segmentation_map} segmentation map"
+                f" (n_heatmap_channels={n_heatmap_channels})"
             )
-        super().__init__(n_heatmap_channels=0, n_output_channels=51)
+        super().__init__(
+            n_heatmap_channels=n_heatmap_channels, n_output_channels=51
+        )
 
         resume = bool(args.resume_from)
         if not resume:

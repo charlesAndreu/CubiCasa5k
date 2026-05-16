@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from dataloader import build_cubicasa5k_simple_eval_dataloaders, n_segmentation_classes
+from entropy_heatmap import all_classes_entropy_heatmap
 from floortrans.metrics import runningScore
 from model import cubi_casa5k_simple_model
 from train_simple import TRAIN_SIMPLE_CONFIG_DEFAULTS
@@ -38,8 +39,25 @@ def _tensor_to_bgr_uint8(image_chw):
     return cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
 
 
+def _save_entropy_heatmap_png(path, entropy_hw, title):
+    """Normalized entropy map in [0, 1] as a color heatmap PNG."""
+    fig, ax = plt.subplots(figsize=(8, 8))
+    im = ax.imshow(
+        entropy_hw,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="inferno",
+        interpolation="nearest",
+    )
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Normalized entropy")
+    ax.set_title(title)
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _save_segmentation_map_png(path, seg_hw, n_classes):
-    """Full multiclass map as RGB PNG (tab20), same style as TensorBoard / earlier eval."""
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(
         seg_hw,
@@ -54,18 +72,28 @@ def _save_segmentation_map_png(path, seg_hw, n_classes):
     plt.close(fig)
 
 
-def save_eval_room_triplet(
+def save_eval_entropy_heatmap(out_dir, idx, logits_chw):
+    """Save all-class entropy heatmap for a visualized sample."""
+    stem = f"sample_{idx:05d}"
+    hm_all = all_classes_entropy_heatmap(logits_chw).detach().cpu().numpy()
+    _save_entropy_heatmap_png(
+        os.path.join(out_dir, f"{stem}_entropy_all_classes.png"),
+        hm_all,
+        "Entropy (all classes)",
+    )
+
+
+def save_eval_sample_images(
     out_dir,
     idx,
     image_chw,
     seg_pred_hw,
     n_classes,
+    include_wall=False,
 ):
     """
-    Room segmentation only (12 classes): PNG exports —
-    *_input.png (BGR floorplan),
-    *_segmentation.png (multiclass map, tab20 figure),
-    *_wall.png (binary wall-class mask).
+    PNG exports — *_input.png, *_segmentation.png;
+    *_wall.png only when include_wall (room segmentation).
     """
     stem = f"sample_{idx:05d}"
     bgr = _tensor_to_bgr_uint8(image_chw)
@@ -77,6 +105,9 @@ def save_eval_room_triplet(
         seg_pred_hw,
         n_classes,
     )
+
+    if not include_wall:
+        return
 
     model_wall = np.isin(seg_pred_hw, WALL_CLASSES).astype(np.uint8)
     if model_wall.shape[0] != h or model_wall.shape[1] != w:
@@ -133,20 +164,20 @@ class SegmentationMapEvaluator:
         running_metrics_raw = runningScore(self.n_output_channels)
         self.model.eval()
 
-        room_eval = self.segmentation_map == "room"
-        vis_dir = None
-        vis_indices = set()
-        if room_eval:
-            n_samples = len(testloader.dataset)
-            rng = np.random.default_rng(42)
-            k_vis = min(3, n_samples)
-            vis_indices = set(rng.choice(n_samples, size=k_vis, replace=False).tolist())
-            vis_dir = os.path.join(results_dir, "eval_samples_seed42")
-            os.makedirs(vis_dir, exist_ok=True)
+        save_wall = self.segmentation_map.startswith("room")
+        n_samples = len(testloader.dataset)
+        rng = np.random.default_rng(42)
+        k_vis = min(3, n_samples)
+        vis_indices = set(rng.choice(n_samples, size=k_vis, replace=False).tolist())
+        vis_dir = os.path.join(results_dir, "eval_samples_seed42")
+        os.makedirs(vis_dir, exist_ok=True)
 
         # ------------------------------------------------------------
         # Evaluation
         # ------------------------------------------------------------
+
+        entropy_all_sum = 0.0
+        entropy_pixel_count = 0
 
         global_idx = 0
         with torch.no_grad():
@@ -172,20 +203,31 @@ class SegmentationMapEvaluator:
 
                 running_metrics_raw.update([map_gt], [map_pred])
 
-                if room_eval and vis_dir is not None and global_idx in vis_indices:
-                    save_eval_room_triplet(
+                logits_chw = outputs[0]
+                hm_all = all_classes_entropy_heatmap(logits_chw)
+                n_pixels = hm_all.numel()
+                entropy_all_sum += float(hm_all.sum().item())
+                entropy_pixel_count += n_pixels
+
+                if global_idx in vis_indices:
+                    save_eval_sample_images(
                         vis_dir,
                         global_idx,
                         images[0],
                         map_pred,
                         self.n_output_channels,
+                        include_wall=save_wall,
                     )
+                    save_eval_entropy_heatmap(vis_dir, global_idx, logits_chw)
 
                 global_idx += 1
 
         score, class_iou = running_metrics_raw.get_scores()
         confusion_matrix = running_metrics_raw.confusion_matrix.copy()
-        return score, class_iou, confusion_matrix, vis_dir
+        mean_entropy_all_classes = (
+            entropy_all_sum / entropy_pixel_count if entropy_pixel_count else 0.0
+        )
+        return score, class_iou, confusion_matrix, vis_dir, mean_entropy_all_classes
 
 
 def load_eval_args(run_dir):
@@ -272,8 +314,8 @@ if __name__ == "__main__":
     args = load_eval_args(run_dir)
 
     evaluator = SegmentationMapEvaluator(args)
-    score, class_iou, confusion_matrix, vis_dir = evaluator.evaluate(
-        results_dir=run_dir
+    score, class_iou, confusion_matrix, vis_dir, mean_entropy_all_classes = (
+        evaluator.evaluate(results_dir=run_dir)
     )
 
     confusion_image_path, confusion_raw_path = save_confusion_matrix_artifacts(
@@ -283,9 +325,7 @@ if __name__ == "__main__":
     results = {
         "score": _to_jsonable(score),
         "class_iou": _to_jsonable(class_iou),
-        "confusion_matrix_image": os.path.basename(confusion_image_path),
-        "confusion_matrix_raw": os.path.basename(confusion_raw_path),
-        "eval_samples_dir": os.path.basename(vis_dir) if vis_dir else None,
+        "mean_entropy_all_classes": mean_entropy_all_classes,
     }
 
     output_path = os.path.join(run_dir, "eval.json")
@@ -295,5 +335,10 @@ if __name__ == "__main__":
     print(f"Saved evaluation results to {output_path}")
     print(f"Saved confusion matrix image to {confusion_image_path}")
     print(f"Saved confusion matrix raw values to {confusion_raw_path}")
+    print(f"Mean entropy (all classes): {mean_entropy_all_classes:.6f}")
     if vis_dir:
-        print(f"Saved room samples (input / segmentation / wall) under {vis_dir}")
+        extras = " / wall" if args.segmentation_map.startswith("room") else ""
+        print(
+            f"Saved eval samples (input / segmentation{extras} / entropy heatmap) "
+            f"under {vis_dir}"
+        )

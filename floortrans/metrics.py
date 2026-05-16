@@ -133,7 +133,7 @@ def polygons_to_tensor(
             d = split[0]
         else:
             d = 0
-        jj, ii = draw.polygon(polygons_val[i][:, 1], polygons_val[i][:, 0])
+        jj, ii = draw.polygon(polygons_val[i][:, 1], polygons_val[i][:, 0], shape=size)
         ten[pol_type["class"] + d][jj, ii] = 1
 
     return ten
