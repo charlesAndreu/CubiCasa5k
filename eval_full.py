@@ -6,9 +6,7 @@ Mini room layout (3 classes): 0 = outside, 1 = walls, 2 = inside
 Mini icon layout (4 classes): 0 = empty,   1 = window, 2 = door, 3 = others
 
 Outputs per run (saved under <run_dir>/):
-  * eval.csv — 12 rows (3 post-processing thresholds × 4 modes):
-      no rotation | no rotation + post_processing |
-      rotation (4× TTA mean) | rotation + post_processing
+  * eval.csv — 8 rows: raw no_rotation / rotation, then post-processing @ 0.30/0.35/0.40
   * eval.json — same metrics in JSON form
   * confusion_{room|icon}_{raw|postproc}.png / _raw.json (no-TTA raw + TTA @ 0.35)
   * eval_samples_seed42/ — 3 random samples (TTA, postproc threshold 0.35)
@@ -79,12 +77,16 @@ EVAL_THRESHOLDS = [0.30, 0.35, 0.40]
 VIS_POSTPROC_THRESHOLD = 0.35
 ROTATIONS = [(0, 0), (1, -1), (2, 2), (-1, 1)]
 
-CSV_MODES = (
-    "no_rotation",
-    "no_rotation + post_processing",
-    "rotation",
-    "rotation + post_processing",
-)
+def _eval_row_specs():
+    """8 evaluation rows: 2 raw + 3 thresholds × 2 (no_rotation / rotation + post_processing)."""
+    specs = [
+        ("no_rotation", None, False, False),
+        ("rotation", None, False, True),
+    ]
+    for thr in EVAL_THRESHOLDS:
+        specs.append((f"{thr:.2f} no_rotation + post_processing", thr, True, False))
+        specs.append((f"{thr:.2f} rotation + post_processing", thr, True, True))
+    return specs
 
 
 def get_polygons_mini(predictions, threshold, all_opening_types):
@@ -236,61 +238,21 @@ def run_postproc_mini(heatmaps, rooms, icons, full_res_shape, threshold):
     return pol_rooms, pol_icons
 
 
-def _fmt_cell(value):
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return ""
-    if isinstance(value, float):
-        return f"{value:.8f}"
-    return str(value)
-
-
-def _metrics_cells(score, class_iou, n_classes):
-    """Flatten runningScore output into CSV column values (or empty strings)."""
-    if score is None:
-        return [""] * (4 + n_classes + 4 + n_classes)
-    cells = [
-        score["Overall Acc"],
-        score["Mean Acc"],
-        score["FreqW Acc"],
-        score["Mean IoU"],
-    ]
-    cls_iou = class_iou["Class IoU"]
+def _head_metrics_dict(score, class_metrics, prefix, n_classes):
+    """Aggregate + per-class IoU and accuracy for one segmentation head."""
+    out = {
+        f"{prefix}_overall_acc": score["Overall Acc"],
+        f"{prefix}_mean_acc": score["Mean Acc"],
+        f"{prefix}_freqw_acc": score["FreqW Acc"],
+        f"{prefix}_mean_iou": score["Mean IoU"],
+    }
     for c in range(n_classes):
-        cells.append(cls_iou[str(c)])
-    return cells
+        out[f"{prefix}_iou_{c}"] = class_metrics["Class IoU"][str(c)]
+        out[f"{prefix}_acc_{c}"] = class_metrics["Class Acc"][str(c)]
+    return out
 
 
-def write_eval_csv(path, rows):
-    header = [
-        "threshold",
-        "mode",
-        "room_overall_acc",
-        "room_mean_acc",
-        "room_freqw_acc",
-        "room_mean_iou",
-        "room_iou_0",
-        "room_iou_1",
-        "room_iou_2",
-        "icon_overall_acc",
-        "icon_mean_acc",
-        "icon_freqw_acc",
-        "icon_mean_iou",
-        "icon_iou_0",
-        "icon_iou_1",
-        "icon_iou_2",
-        "icon_iou_3",
-        "mean_room_entropy",
-        "mean_icon_entropy",
-        "post_failed",
-    ]
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(rows)
-
-
-def build_csv_rows(
-    thresholds,
+def build_eval_rows(
     running_room_raw_no_tta,
     running_icon_raw_no_tta,
     running_room_raw_tta,
@@ -307,43 +269,67 @@ def build_csv_rows(
     mean_icon_entropy_tta,
 ):
     rows = []
-    for thr in thresholds:
-        for mode in CSV_MODES:
-            use_pp = "post_processing" in mode
-            use_tta = mode.startswith("rotation")
+    for mode_label, thr, use_pp, use_tta in _eval_row_specs():
+        row = {"mode": mode_label}
+        if thr is not None:
+            row["postproc_threshold"] = thr
 
-            if use_pp:
-                if use_tta:
-                    rr, ir = running_room_pp_tta[thr], running_icon_pp_tta[thr]
-                    pf = post_failed_tta[thr]
-                else:
-                    rr, ir = running_room_pp_no_tta[thr], running_icon_pp_no_tta[thr]
-                    pf = post_failed_no_tta[thr]
-                room_score, room_iou = rr.get_scores()
-                icon_score, icon_iou = ir.get_scores()
-                ent_r = ent_i = ""
+        if use_pp:
+            if use_tta:
+                rr, ir = running_room_pp_tta[thr], running_icon_pp_tta[thr]
+                row["post_failed"] = post_failed_tta[thr]
             else:
-                if use_tta:
-                    rr, ir = running_room_raw_tta, running_icon_raw_tta
-                    ent_r, ent_i = mean_room_entropy_tta, mean_icon_entropy_tta
-                else:
-                    rr, ir = running_room_raw_no_tta, running_icon_raw_no_tta
-                    ent_r, ent_i = mean_room_entropy_no_tta, mean_icon_entropy_no_tta
-                room_score, room_iou = rr.get_scores()
-                icon_score, icon_iou = ir.get_scores()
-                pf = ""
+                rr, ir = running_room_pp_no_tta[thr], running_icon_pp_no_tta[thr]
+                row["post_failed"] = post_failed_no_tta[thr]
+            row["mean_room_entropy"] = None
+            row["mean_icon_entropy"] = None
+        else:
+            if use_tta:
+                rr, ir = running_room_raw_tta, running_icon_raw_tta
+                row["mean_room_entropy"] = mean_room_entropy_tta
+                row["mean_icon_entropy"] = mean_icon_entropy_tta
+            else:
+                rr, ir = running_room_raw_no_tta, running_icon_raw_no_tta
+                row["mean_room_entropy"] = mean_room_entropy_no_tta
+                row["mean_icon_entropy"] = mean_icon_entropy_no_tta
+            row["post_failed"] = None
 
-            row = [
-                f"{thr:.2f}",
-                mode,
-                *_metrics_cells(room_score, room_iou, N_ROOM_CLASSES),
-                *_metrics_cells(icon_score, icon_iou, N_ICON_CLASSES),
-                _fmt_cell(ent_r),
-                _fmt_cell(ent_i),
-                pf if pf != "" else "",
-            ]
-            rows.append(row)
+        room_score, room_cm = rr.get_scores()
+        icon_score, icon_cm = ir.get_scores()
+        row.update(_head_metrics_dict(room_score, room_cm, "room", N_ROOM_CLASSES))
+        row.update(_head_metrics_dict(icon_score, icon_cm, "icon", N_ICON_CLASSES))
+        rows.append(row)
     return rows
+
+
+def _eval_csv_columns():
+    col_order = ["mode", "postproc_threshold"]
+    for prefix, n in (("room", N_ROOM_CLASSES), ("icon", N_ICON_CLASSES)):
+        col_order.extend(
+            [
+                f"{prefix}_overall_acc",
+                f"{prefix}_mean_acc",
+                f"{prefix}_freqw_acc",
+                f"{prefix}_mean_iou",
+            ]
+        )
+        col_order.extend([f"{prefix}_iou_{c}" for c in range(n)])
+        col_order.extend([f"{prefix}_acc_{c}" for c in range(n)])
+    col_order.extend(["mean_room_entropy", "mean_icon_entropy", "post_failed"])
+    return col_order
+
+
+def write_eval_csv(path, rows):
+    columns = _eval_csv_columns()
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            out = {k: row.get(k, "") for k in columns}
+            for k, v in out.items():
+                if v is None:
+                    out[k] = ""
+            writer.writerow(out)
 
 
 def _entropy_from_probs(probs_chw, n_classes):
@@ -572,8 +558,7 @@ class FullSegEvaluator:
                 global_idx += 1
 
         denom = max(1, entropy_pixel_count)
-        csv_rows = build_csv_rows(
-            EVAL_THRESHOLDS,
+        eval_rows = build_eval_rows(
             running_room_raw_no_tta,
             running_icon_raw_no_tta,
             running_room_raw_tta,
@@ -592,7 +577,7 @@ class FullSegEvaluator:
 
         vis_thr = VIS_POSTPROC_THRESHOLD
         return {
-            "csv_rows": csv_rows,
+            "eval_rows": eval_rows,
             "n_samples": n_samples,
             "vis_dir": vis_dir,
             "confusion_room_raw": running_room_raw_no_tta.confusion_matrix.copy(),
@@ -634,10 +619,10 @@ def load_eval_args(run_dir):
 
 
 def _json_block(runner):
-    score, class_iou = runner.get_scores()
+    score, class_metrics = runner.get_scores()
     return {
         "score": _to_jsonable(score),
-        "class_iou": _to_jsonable(class_iou),
+        "class_iou": _to_jsonable(class_metrics),
     }
 
 
@@ -651,7 +636,7 @@ if __name__ == "__main__":
     results = evaluator.evaluate(results_dir=run_dir)
 
     csv_path = os.path.join(run_dir, "eval.csv")
-    write_eval_csv(csv_path, results["csv_rows"])
+    write_eval_csv(csv_path, results["eval_rows"])
 
     cm_paths = {}
     for stem, cm in [
@@ -665,17 +650,11 @@ if __name__ == "__main__":
         img_path, raw_path = save_confusion_matrix_artifacts(run_dir, cm, stem=stem)
         cm_paths[stem] = (img_path, raw_path)
 
-    vis_thr = VIS_POSTPROC_THRESHOLD
     json_rows = []
-    for thr, mode in [
-        (t, m)
-        for t in EVAL_THRESHOLDS
-        for m in CSV_MODES
-    ]:
-        use_pp = "post_processing" in mode
-        use_tta = mode.startswith("rotation")
-        entry = {"threshold": thr, "mode": mode}
+    for mode_label, thr, use_pp, use_tta in _eval_row_specs():
+        entry = {"mode": mode_label}
         if use_pp:
+            entry["postproc_threshold"] = thr
             if use_tta:
                 entry["room"] = _json_block(results["running_room_pp_tta"][thr])
                 entry["icon"] = _json_block(results["running_icon_pp_tta"][thr])
@@ -707,17 +686,16 @@ if __name__ == "__main__":
 
     json_payload = {
         "thresholds": EVAL_THRESHOLDS,
-        "modes": list(CSV_MODES),
         "rows": json_rows,
         "n_samples": results["n_samples"],
-        "vis_postproc_threshold": vis_thr,
+        "vis_postproc_threshold": VIS_POSTPROC_THRESHOLD,
     }
 
     output_path = os.path.join(run_dir, "eval.json")
     with open(output_path, "w") as f:
         json.dump(json_payload, f, indent=2)
 
-    print(f"Saved evaluation CSV to {csv_path} ({len(results['csv_rows'])} rows)")
+    print(f"Saved evaluation CSV to {csv_path} ({len(results['eval_rows'])} rows)")
     print(f"Saved evaluation results to {output_path}")
     for stem, (img_path, raw_path) in cm_paths.items():
         print(f"  {stem}: {img_path}, {raw_path}")
