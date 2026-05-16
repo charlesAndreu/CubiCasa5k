@@ -16,12 +16,17 @@ def _tb_finite_float(x):
     return v
 
 
-def _figure_heatmap_sum(map_hw: np.ndarray, title: str) -> plt.Figure:
+def _pred_heatmap_sum_display(arr, noise_percentile = 30.0):
+    """Display only: subtract a low percentile so near-uniform sigmoid-sum noise maps closer to zero."""
+    lo = float(np.percentile(arr, noise_percentile))
+    return np.maximum(arr - lo, 0.0)
+
+
+def _figure_heatmap_sum(map_hw):
     """Single 2D map (e.g. sum over heatmap channels) for TensorBoard add_figure."""
     fig, ax = plt.subplots(figsize=(10, 8))
     vmax = max(float(map_hw.max()), 1e-6)
     im = ax.imshow(map_hw, vmin=0.0, vmax=vmax, cmap="magma", aspect="equal")
-    ax.set_title(title)
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.046)
     fig.tight_layout()
@@ -181,8 +186,7 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
         n_output_channels,
         device,
     ):
-        """Log val images / GT / preds for room + icon heads (not the simple single-head layout)."""
-        del n_output_channels  # API parity with SimpleTrainingTensorBoard; splits come from input_slice.
+        del n_output_channels  # kept from SimpleTrainingTensorBoard for API parity; no need here.
 
         if self.writer is None or not args.plot_samples:
             return
@@ -226,9 +230,7 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
                     hm_gt_sum = (
                         labels_val[0, :n_hm].sum(dim=0).detach().float().cpu().numpy()
                     )
-                    fig_sum_gt = _figure_heatmap_sum(
-                        hm_gt_sum, "Sum of GT heatmap channels (Gaussian targets)"
-                    )
+                    fig_sum_gt = _figure_heatmap_sum(hm_gt_sum)
                     self.writer.add_figure(
                         f"Image {i} heatmaps_sum_gt_{segmentation_map}",
                         fig_sum_gt,
@@ -246,10 +248,8 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
                     .cpu()
                     .numpy()
                 )
-                fig_sum_pred = _figure_heatmap_sum(
-                    hm_pred_sum,
-                    "Sum of predicted heatmaps (sigmoid per channel, then sum)",
-                )
+                hm_pred_vis = _pred_heatmap_sum_display(hm_pred_sum)
+                fig_sum_pred = _figure_heatmap_sum(hm_pred_vis)
                 self.writer.add_figure(
                     f"Image {i} heatmaps_sum_pred_{segmentation_map}",
                     fig_sum_pred,
