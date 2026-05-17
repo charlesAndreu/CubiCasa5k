@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 
 
 def _tensor_to_rgb_numpy(image_chw):
-    """Float tensor (3, H, W) → RGB array (H, W, 3) in [0, 1] for saving."""
+    """Float tensor (3, H, W) --> RGB array (H, W, 3) in [0, 1] for saving."""
     x = image_chw.detach().cpu().float().numpy().transpose(1, 2, 0)
     lo, hi = float(x.min()), float(x.max())
     if hi - lo > 1e-6:
@@ -34,7 +34,7 @@ def _tensor_to_rgb_numpy(image_chw):
 
 
 def _tensor_to_bgr_uint8(image_chw):
-    """Float tensor (3, H, W) → BGR uint8 for OpenCV."""
+    """Float tensor (3, H, W) --> BGR uint8 for OpenCV."""
     rgb01 = _tensor_to_rgb_numpy(image_chw)
     rgb_u8 = (rgb01 * 255.0).astype(np.uint8)
     return cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)

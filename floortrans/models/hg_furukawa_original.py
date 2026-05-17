@@ -234,7 +234,7 @@ class hg_furukawa_original(nn.Module):
         """
         # Always interpolate x to y's (H, W). If sizes already match, this is a no-op
         # and avoids `if y.shape != x.shape`, which breaks torch.jit tracing (TensorBoard add_graph)
-        # with TracerWarning: tensor→Python bool in the graph recorder.
+        # with TracerWarning: tensor-->Python bool in the graph recorder.
         _, _, H, W = y.size()
         x_up = F.interpolate(x, size=(H, W), mode="bilinear", align_corners=False)
         return x_up + y

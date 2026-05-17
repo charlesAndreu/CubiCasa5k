@@ -46,7 +46,7 @@ class CubiCasa5KFurukawa(hg_furukawa_original):
             )
         else:
             # train_simple: single segmentation head, all channels are class logits
-            # → no sigmoid (cross-entropy is applied on raw logits)
+            # --> no sigmoid (cross-entropy is applied on raw logits)
             self.n_out = n_segmentation_classes(segmentation_map)
             n_heatmap_channels = 0
             logger.info(

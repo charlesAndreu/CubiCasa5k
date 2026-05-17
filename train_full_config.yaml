@@ -32,7 +32,7 @@ plot_samples: true # log validation image/prediction samples to TensorBoard
 
 # DataLoader / augmentation flags
 # train_full uses much more RAM per worker than train_simple (23-channel labels + heatmap
-# rasterization). With persistent_workers, train + val each keep a worker pool → ~2× processes.
+# rasterization). With persistent_workers, train + val each keep a worker pool --> ~2× processes.
 # If you see swap / high I/O wait: lower num_workers and prefetch_factor first; then batch_size.
 debug: false # set true to force num_workers=0
 num_workers: 8

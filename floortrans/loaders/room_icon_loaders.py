@@ -241,7 +241,7 @@ class FullLoader(Dataset):
         # Geo-augs (RandomCrop / ResizePadded) spatially transform image+label and clip heatmap points.
         # RandomRotations rotates image+label and remaps heatmap channel indices.
         # DictToTensor rasterises the point dict into 21 Gaussian heatmap channels and
-        #   prepends them to label: (2,H,W) → (23,H,W) with [0:21]=heatmaps, [21]=room, [22]=icon.
+        #   prepends them to label: (2,H,W) --> (23,H,W) with [0:21]=heatmaps, [21]=room, [22]=icon.
         # ColorJitterTorch perturbs brightness/contrast/saturation on image only.
         if self.augmentations is not None:
             sample = self.augmentations(sample)

@@ -321,11 +321,11 @@ def main():
           f"(pred {ref_row['pred_active']} vs GT {ref_row['gt_active']} peaks on active channels)")
 
     if ref_row["ratio_active"] < 1.0:
-        print("  → Under GT peak count at this threshold; lower thr if you want more points.")
+        print("  --> Under GT peak count at this threshold; lower thr if you want more points.")
     elif ref_row["ratio_active"] > 1.4:
-        print("  → Heavy over-detection; raise threshold only if post-proc is too slow/noisy.")
+        print("  --> Heavy over-detection; raise threshold only if post-proc is too slow/noisy.")
     else:
-        print("  → OK for a slight-over-detection policy (pred ≳ GT).")
+        print("  --> OK for a slight-over-detection policy (pred ≳ GT).")
 
     print(
         f"\n  Suggested POSTPROC_THRESHOLD ≈ {suggested:.2f}  "
