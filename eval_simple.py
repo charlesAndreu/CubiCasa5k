@@ -93,17 +93,14 @@ def _save_combined_segmentation_map_png(
     door_class,
 ):
     """
-    Combined map (outside / walls / inside / windows / doors) using the same
-    tab20 colors as the separate room and icon segmentation PNGs.
+    Combined map: all room-mini classes plus window/door colors from the icon head.
     """
-    colors = [
-        room_class_colors[0],
-        room_class_colors[1],
-        room_class_colors[2],
+    n_room = n_combined_classes - 2
+    colors = list(room_class_colors[:n_room]) + [
         icon_class_colors[window_class],
         icon_class_colors[door_class],
     ]
-    cmap = mcolors.ListedColormap(colors[:n_combined_classes])
+    cmap = mcolors.ListedColormap(colors)
     _save_segmentation_map_png(path, combined_hw, n_combined_classes, cmap=cmap)
 
 

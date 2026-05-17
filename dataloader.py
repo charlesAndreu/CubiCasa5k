@@ -19,7 +19,7 @@ from floortrans.loaders.augmentations import Compose, DictToTensor
 def n_segmentation_classes(segmentation_map):
     """Head output channels: full room/icon vs reduced mini label spaces."""
     if segmentation_map == "room-mini":
-        return 3
+        return 4
     if segmentation_map == "icon-mini":
         return 4
     if segmentation_map.startswith("room"):

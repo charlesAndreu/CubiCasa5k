@@ -9,6 +9,7 @@ from tqdm import tqdm
 from floortrans.loaders.room_icon_loaders import (
     ICON_MINI_DEFAULT_CLASS,
     ICON_MINI_MAPPING,
+    N_ROOM_MINI_CLASSES,
     ROOM_MINI_DEFAULT_CLASS,
     ROOM_MINI_MAPPING,
 )
@@ -16,7 +17,7 @@ from floortrans.loaders.room_icon_loaders import (
 # Must match train_simple.py / segmentation heads
 N_ROOM_CLASSES = 12
 N_ICON_CLASSES = 11
-N_ROOM_MINI_CLASSES = 3
+# Re-exported from room_icon_loaders (4 classes).
 N_ICON_MINI_CLASSES = 4
 
 

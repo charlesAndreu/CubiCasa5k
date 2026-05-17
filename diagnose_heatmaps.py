@@ -215,7 +215,7 @@ def main():
     parser.add_argument(
         "--ref-threshold",
         type=float,
-        default=0.30,
+        default=0.20,
         help="threshold for per-channel tables and overlays (matches eval_full default)",
     )
     args_cli = parser.parse_args()

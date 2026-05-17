@@ -63,9 +63,9 @@ class Cubicasa5kFullTrainer:
     def __init__(self, args, log_dir, writer, logger):
         self.input_slice = [
             21,
-            3,
             4,
-        ]  # 21 heatmap channels, 3 room classes, 4 icon classes
+            4,
+        ]  # 21 heatmap channels, 4 room-mini classes, 4 icon classes
         self.n_output_channels = sum(self.input_slice)
         self.args = args
         self.log_dir = log_dir
@@ -158,7 +158,7 @@ class Cubicasa5kFullTrainer:
         # heatmaps are regression (MSE) — already tracked via criterion loss
         running_metrics_room_val = runningScore(
             self.input_slice[1]
-        )  # 3 room-mini classes
+        )  # 4 room-mini classes
         running_metrics_icon_val = runningScore(
             self.input_slice[2]
         )  # 4 icon-mini classes

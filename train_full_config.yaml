@@ -4,12 +4,12 @@
 #   (reload best checkpoint + reduce LR by x0.1 after plateau)
 # - sgd: SGD with polynomial-style LambdaLR decay
 # - adam-scheduler: Adam with step-like LambdaLR decay (via l_rate_drop)
-optimizer: adam-patience
+optimizer: adam-patience-previous-best
 
 # Per-head class weights for UncertaintyCustomLoss (null to disable)
 # choices: null, inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num
-room_weights_method: inverse_sqrt_frequency
-icon_weights_method: inverse_sqrt_frequency
+room_weights_method: null
+icon_weights_method: null
 
 # Data and training length
 data_path: data/cubicasa5k/

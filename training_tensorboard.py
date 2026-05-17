@@ -140,7 +140,7 @@ class SimpleTrainingTensorBoard:
 
 class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
 
-    def __init__(self, writer, input_slice=(21, 3, 4)):
+    def __init__(self, writer, input_slice=(21, 4, 4)):
         super().__init__(writer)
         self.input_slice = tuple(int(x) for x in input_slice)
 

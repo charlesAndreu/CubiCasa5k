@@ -17,8 +17,18 @@ from floortrans.loaders.augmentations import (
 )
 
 # Reduced ("mini") label spaces — keep here to avoid circular imports with dataloader.
-ROOM_MINI_MAPPING = {0: 0, 2: 1, 8: 1}  # bg -> 0; wall+railing -> 1
-ROOM_MINI_DEFAULT_CLASS = 2  # rest -> 2
+# LMDB room raster uses 12 classes (see floortrans.plotting.segmentation_plot).
+# Mini room: 0=background, 1=outside, 2=walls, 3=room (all room types merged).
+ROOM_MINI_MAPPING = {
+    0: 0,  # Background
+    1: 1,  # Outdoor
+    2: 2,  # Wall
+    8: 2,  # Railing -> walls
+}
+ROOM_MINI_DEFAULT_CLASS = 3  # Kitchen, Living Room, Bath, Entry, Storage, ...
+N_ROOM_MINI_CLASSES = 4
+ROOM_MINI_WALL_LAYERS = [2]
+
 ICON_MINI_MAPPING = {0: 0, 1: 1, 2: 2}  # bg -> 0; window -> 1; door -> 2
 ICON_MINI_DEFAULT_CLASS = 3  # rest -> 3
 

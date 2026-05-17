@@ -147,7 +147,7 @@ class FocalLoss(nn.Module):
 class UncertaintyCustomLoss(nn.Module):
     def __init__(
         self,
-        input_slice=[21, 3, 4],
+        input_slice=[21, 4, 4],
         target_slice=[21, 1, 1],
         sub=0,
         cuda=True,
