@@ -16,17 +16,17 @@ folder_name,name,segmentation_map,model,optimizer,criterion,data_path,n_epoch,ba
 2026-04-28-17:30:54,icon-ap-ced-scale_INC,icon,,adam-patience,cross-entropy-and-dice,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
 2026-04-28-21:21:10,icon-ap-ced-scale,icon,,adam-patience,cross-entropy-and-dice,data/cubicasa5k/,400,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
 2026-04-29-06:54:49,icon-ap-cew-scale,icon,,adam-patience,cross-entropy,data/cubicasa5k/,400,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_double_sqrt_frequency,2.0,1.0,,,,,,,,
-2026-05-01-10:11:25,room-ap-unet34-cew-scale,room,unet-resnet34,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
+2026-05-01-10:11:25,room-ap-unet34-cew-scale_INC,room,unet-resnet34,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
 2026-05-01-10:13:24,room-ap-unet34-cew-scale,room,unet-resnet34,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
 2026-05-01-12:17:52,room-ap-unet50-cew-scale,room,unet-resnet50,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
 2026-05-01-15:27:46,room-ap-unet152-cew-scale,room,unet-resnet152,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
 2026-05-02-10:57:53,room-ap-unet18-cew-scale,room,unet-resnet18,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,,,,,
-2026-05-03-11:00:05,room-ap-celw-v1,room,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
-2026-05-03-15:40:15,room-ap-celw-v2,room,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
-2026-05-03-20:25:54,icon-ap-celw-v2,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
-2026-05-08-10:11:03,,icon,,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
-2026-05-08-15:20:04,,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,regularization lambda was 0.2 and not 0.5,
-2026-05-09-17:33:19,,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,0.5,,0.6
-2026-05-10-00:40:20,,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,1.0,,0.6
-2026-05-10-09:15:39,,room,segformer,adam-patience,cross-entropy,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,nvidia/segformer-b0-finetuned-ade-512-512,1.0,,0.6
-2026-05-10-12:50:24,,room-mini,,adam-patience,cross-entropy,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,0.4,nvidia/segformer-b0-finetuned-ade-512-512,1.0,,0.6
+2026-05-03-11:00:05,room-ap-celw-v1-scale,room,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
+2026-05-03-15:40:15,room-ap-celw-v2-scale,room,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
+2026-05-03-20:25:54,icon-ap-celw-v2-scale,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
+2026-05-08-10:11:03,icon-ap-ce-scale,icon,,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
+2026-05-08-15:20:04,icon-ap-celw-reg02-œscale,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,regularization lambda was 0.2 and not 0.5,
+2026-05-09-17:33:19,room-ap-cetw-tw05-scale,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,0.5,,0.6
+2026-05-10-00:40:20,room-ap-cetw-tw10-scale,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,1.0,,0.6
+2026-05-10-09:15:39,room-ap-segformer-cew-scale,room,segformer,adam-patience,cross-entropy,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,nvidia/segformer-b0-finetuned-ade-512-512,1.0,,0.6
+2026-05-10-12:50:24,room-mini-ap-ce-scale,room-mini,,adam-patience,cross-entropy,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,0.4,nvidia/segformer-b0-finetuned-ade-512-512,1.0,,0.6
