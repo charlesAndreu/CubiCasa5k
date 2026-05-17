@@ -16,6 +16,12 @@ def _tb_finite_float(x):
     return v
 
 
+def _pred_heatmap_sum_display(arr, noise_percentile = 30.0):
+    """Display only: subtract a low percentile so near-uniform sigmoid-sum noise maps closer to zero."""
+    lo = float(np.percentile(arr, noise_percentile))
+    return np.maximum(arr - lo, 0.0)
+
+
 def _figure_heatmap_sum(map_hw):
     """Single 2D map (e.g. sum over heatmap channels) for TensorBoard add_figure."""
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -242,7 +248,8 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
                     .cpu()
                     .numpy()
                 )
-                fig_sum_pred = _figure_heatmap_sum(hm_pred_sum)
+                hm_pred_vis = _pred_heatmap_sum_display(hm_pred_sum)
+                fig_sum_pred = _figure_heatmap_sum(hm_pred_vis)
                 self.writer.add_figure(
                     f"Image {i} heatmaps_sum_pred_{segmentation_map}",
                     fig_sum_pred,

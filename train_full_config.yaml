@@ -13,7 +13,7 @@ icon_weights_method: inverse_sqrt_frequency
 
 # Data and training length
 data_path: data/cubicasa5k/
-n_epoch: 250
+n_epoch: 350
 batch_size: 26
 image_size: 256
 
