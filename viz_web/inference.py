@@ -23,13 +23,12 @@ if _ROOT not in sys.path:
 
 from eval_full import (  # noqa: E402
     COMBINED_CLASSES,
-    DOOR_CLASS,
     INPUT_SLICE,
     N_HEATMAPS,
     N_ICON_CLASSES,
     N_ROOM_CLASSES,
-    WINDOW_CLASS,
     build_combined_map,
+    combined_map_colors,
     load_eval_args,
     predict_no_rotation,
     run_postproc_mini,
@@ -98,15 +97,8 @@ def _seg_rgb(seg_hw: np.ndarray, n_classes: int, extra_colors=None) -> np.ndarra
 
 
 def _combined_rgb(combined_hw: np.ndarray) -> np.ndarray:
-    from eval_full import DOOR_COMBINED_CLASS, WINDOW_COMBINED_CLASS
-
     room_colors = _tab20_segmentation_colors(N_ROOM_CLASSES)
-    icon_colors = _tab20_segmentation_colors(N_ICON_CLASSES)
-    colors = list(room_colors[:N_ROOM_CLASSES]) + [
-        icon_colors[WINDOW_CLASS],
-        icon_colors[DOOR_CLASS],
-    ]
-    cmap = mcolors.ListedColormap(colors[:COMBINED_CLASSES])
+    cmap = mcolors.ListedColormap(combined_map_colors(room_colors))
     combined_hw = np.clip(combined_hw, 0, COMBINED_CLASSES - 1)
     rgba = cmap(combined_hw / max(COMBINED_CLASSES - 1, 1))
     return (rgba[..., :3] * 255.0).astype(np.uint8)

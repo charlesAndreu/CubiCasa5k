@@ -88,19 +88,12 @@ def _save_combined_segmentation_map_png(
     combined_hw,
     n_combined_classes,
     room_class_colors,
-    icon_class_colors,
-    window_class,
-    door_class,
+    overlay_colors,
 ):
     """
-    Combined map: all room-mini classes plus window/door colors from the icon head.
+    Combined map: room-mini classes (tab20) + overlay_colors [window, door].
     """
-    n_room = n_combined_classes - 2
-    colors = list(room_class_colors[:n_room]) + [
-        icon_class_colors[window_class],
-        icon_class_colors[door_class],
-    ]
-    cmap = mcolors.ListedColormap(colors)
+    cmap = mcolors.ListedColormap(overlay_colors)
     _save_segmentation_map_png(path, combined_hw, n_combined_classes, cmap=cmap)
 
 

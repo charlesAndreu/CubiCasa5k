@@ -38,7 +38,7 @@ def get_engine() -> VizEngine:
         data_path = os.environ.get("CUBI_DATA_PATH", os.path.join(_ROOT, "data", "cubicasa5k"))
         roots = tuple(
             r.strip()
-            for r in os.environ.get("CUBI_RUN_ROOTS", "runs_cubi,runs_cubi_2,runs_cubi_3").split(",")
+            for r in os.environ.get("CUBI_RUN_ROOTS", "runs_cubi,runs_cubi_2,runs_cubi_3,runs_cubi_4").split(",")
             if r.strip()
         )
         engine = VizEngine(data_path=data_path, run_roots=roots)

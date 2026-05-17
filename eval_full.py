@@ -75,6 +75,19 @@ COMBINED_CLASSES = 6  # room 0–3 + windows (4) + doors (5)
 WINDOW_COMBINED_CLASS = 4
 DOOR_COMBINED_CLASS = 5
 
+# Dedicated overlay colors for combined maps (not reused from icon-seg tab20).
+COMBINED_WINDOW_RGBA = (0.20, 0.75, 0.25, 1.0)  # green
+COMBINED_DOOR_RGBA = (0.95, 0.35, 0.10, 1.0)  # orange
+
+
+def combined_map_colors(room_class_colors, n_combined_classes=COMBINED_CLASSES):
+    """Listed colormap entries: room-mini classes + window + door."""
+    n_room = n_combined_classes - 2
+    return list(room_class_colors[:n_room]) + [
+        COMBINED_WINDOW_RGBA,
+        COMBINED_DOOR_RGBA,
+    ]
+
 # Post-processing peak thresholds swept without rotation (see diagnose_heatmaps.py).
 EVAL_THRESHOLDS = [0.20, 0.25, 0.30]
 
@@ -339,15 +352,12 @@ def save_sample_raw_pngs(
         N_ICON_CLASSES,
     )
     room_colors = _tab20_segmentation_colors(N_ROOM_CLASSES)
-    icon_colors = _tab20_segmentation_colors(N_ICON_CLASSES)
     _save_combined_segmentation_map_png(
         os.path.join(out_dir, f"{stem}_combined.png"),
         build_combined_map(rooms_seg, icons_seg),
         COMBINED_CLASSES,
         room_colors,
-        icon_colors,
-        WINDOW_CLASS,
-        DOOR_CLASS,
+        combined_map_colors(room_colors),
     )
     room_ent = _entropy_from_probs(rooms_probs, N_ROOM_CLASSES).numpy()
     icon_ent = _entropy_from_probs(icons_probs, N_ICON_CLASSES).numpy()
@@ -384,15 +394,12 @@ def save_sample_postproc_pngs(out_dir, idx, pol_rooms, pol_icons):
     if pol_rooms is not None and pol_icons is not None:
         combined = build_combined_map(pol_rooms, pol_icons)
         room_colors = _tab20_segmentation_colors(N_ROOM_CLASSES)
-        icon_colors = _tab20_segmentation_colors(N_ICON_CLASSES)
         _save_combined_segmentation_map_png(
             os.path.join(out_dir, f"{stem}_combined{tag}.png"),
             combined,
             COMBINED_CLASSES,
             room_colors,
-            icon_colors,
-            WINDOW_CLASS,
-            DOOR_CLASS,
+            combined_map_colors(room_colors),
         )
 
 
