@@ -42,6 +42,28 @@ TRAIN_FULL_CONFIG_DEFAULTS = {
 }
 
 
+def _load_criterion_from_checkpoint(criterion, path, device, logger):
+    """Restore uncertainty log_vars (and other criterion state) from a train_full .pkl."""
+    if not path or not os.path.isfile(path):
+        return
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    if not isinstance(ckpt, dict) or "criterion_state" not in ckpt:
+        logger.warning(
+            "Checkpoint %s has no criterion_state; log_vars stay at initialization.",
+            path,
+        )
+        return
+    criterion.load_state_dict(ckpt["criterion_state"], strict=False)
+    unc = criterion.get_uncertainty_scalars()
+    logger.info(
+        "Loaded criterion from %s (room_var=%.4f, icon_var=%.4f, log_vars=%s)",
+        path,
+        unc["room_var"],
+        unc["icon_var"],
+        criterion.log_vars.detach().cpu().tolist(),
+    )
+
+
 def _seg_argmax_at_label_size(logits_chw, label_hw):
     """
     Argmax segmentation logits on the label grid (native resolution).
@@ -133,6 +155,14 @@ class Cubicasa5kFullTrainer:
         self.model = self.model_setup()
         self.criterion = self.criterion_setup()
         self.optimizer, self.scheduler = self.optimizer_setup()
+
+        if self.args.resume_from:
+            _load_criterion_from_checkpoint(
+                self.criterion,
+                self.args.resume_from,
+                self.device,
+                self.logger,
+            )
 
         self.tb.log_args(self.args)
         if self.use_amp:
@@ -283,10 +313,15 @@ class Cubicasa5kFullTrainer:
                         + str(no_improvement)
                         + " loading last best model and reducing learning rate."
                     )
+                    ckpt_path = os.path.join(self.log_dir, "model_best_val_loss.pkl")
                     checkpoint = torch.load(
-                        os.path.join(self.log_dir, "model_best_val_loss.pkl")
+                        ckpt_path, map_location=self.device, weights_only=False
                     )
                     self.model.load_state_dict(checkpoint["model_state"])
+                    if "criterion_state" in checkpoint:
+                        self.criterion.load_state_dict(
+                            checkpoint["criterion_state"], strict=False
+                        )
                     for i, p in enumerate(self.optimizer.param_groups):
                         self.optimizer.param_groups[i]["lr"] = p["lr"] * 0.1
                     no_improvement = 0
@@ -330,6 +365,16 @@ class Cubicasa5kFullTrainer:
         # ------------------------------------------------------------
         self.logger.info("Last epoch done saving final model...")
         self.save_checkpoint("model_last_epoch.pkl", epoch + 1)
+
+        unc = self.criterion.get_uncertainty_scalars()
+        log_vars = self.criterion.log_vars.detach().cpu().tolist()
+        self.logger.info(
+            "Final log_vars [room, icon]: %s  (exp → room_var=%.6f, icon_var=%.6f)",
+            log_vars,
+            unc["room_var"],
+            unc["icon_var"],
+        )
+
         self.tb.close()
 
 

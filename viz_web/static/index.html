@@ -9,14 +9,32 @@
 <body>
   <header>
     <h1>Floor plan viewer</h1>
-    <p class="subtitle">30 test plans · heatmaps &amp; seg · threshold post-proc</p>
+    <p class="subtitle">Test-set presets or upload · model outputs · threshold post-proc</p>
   </header>
 
   <section class="controls">
-    <label>
+    <fieldset class="source-fieldset">
+      <legend>Input</legend>
+      <label class="inline">
+        <input type="radio" name="source" id="sourcePreset" value="preset" checked />
+        Test set
+      </label>
+      <label class="inline">
+        <input type="radio" name="source" id="sourceUpload" value="upload" />
+        Upload
+      </label>
+    </fieldset>
+
+    <label id="planLabel">
       Plan
       <select id="planSelect"></select>
     </label>
+
+    <label id="uploadLabel" class="hidden">
+      Image
+      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/jpg,image/webp" />
+    </label>
+
     <label>
       Model
       <select id="modelSelect">
@@ -35,17 +53,15 @@
   </section>
 
   <main class="grid">
-    <!-- row 1: original | post-proc -->
     <figure class="panel row-main">
       <figcaption>Original plan</figcaption>
-      <div class="img-wrap"><img id="imgInput" alt="Original plan" /></div>
+      <div class="img-wrap"><img id="imgInput" alt="Input floor plan" /></div>
     </figure>
     <figure class="panel row-main highlight">
       <figcaption>Post-proc combined</figcaption>
       <div class="img-wrap"><img id="imgPostproc" alt="Post-processed combined" /></div>
     </figure>
 
-    <!-- row 2: room | icon seg -->
     <figure class="panel row-seg">
       <figcaption>Room segmentation</figcaption>
       <div class="img-wrap"><img id="imgRoom" alt="Room segmentation" /></div>
@@ -55,7 +71,15 @@
       <div class="img-wrap"><img id="imgIconSeg" alt="Icon segmentation" /></div>
     </figure>
 
-    <!-- row 3: wall | opening HM -->
+    <figure class="panel row-seg">
+      <figcaption>Room entropy</figcaption>
+      <div class="img-wrap"><img id="imgRoomEntropy" alt="Room entropy" /></div>
+    </figure>
+    <figure class="panel row-seg">
+      <figcaption>Icon entropy</figcaption>
+      <div class="img-wrap"><img id="imgIconEntropy" alt="Icon entropy" /></div>
+    </figure>
+
     <figure class="panel row-hm">
       <figcaption>Wall heatmaps (0–12)</figcaption>
       <div class="img-wrap"><img id="imgWall" alt="Wall heatmaps" /></div>
@@ -65,7 +89,6 @@
       <div class="img-wrap"><img id="imgOpening" alt="Opening heatmaps" /></div>
     </figure>
 
-    <!-- row 4: icon HM (full width) -->
     <figure class="panel row-hm span-2">
       <figcaption>Icon heatmaps (17–20)</figcaption>
       <div class="img-wrap"><img id="imgIconHm" alt="Icon heatmaps" /></div>

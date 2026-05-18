@@ -13,18 +13,19 @@ icon_weights_method: null
 
 # Data and training length
 data_path: data/cubicasa5k/
-n_epoch: 350
+n_epoch: 150
 batch_size: 26
 image_size: 256
 
 # Learning-rate controls
-l_rate: 0.001
+# !! reduced from 0.001 to 0.00025 for resume training
+l_rate: 0.00005
 l_rate_drop: 200 # used by adam-scheduler
 patience: 20 # used by patience-based optimizers
 
 # Checkpoints
 furukawa_weights: null # optional pretrained Furukawa weights
-resume_from: null # optional train_simple checkpoint to resume
+resume_from: runs_cubi/2026-05-18-08:33:48/model_best_val_loss.pkl # model weights + criterion log_vars if present in .pkl
 
 # Logging
 log_path: runs_cubi/

@@ -58,6 +58,15 @@ def _save_entropy_heatmap_png(path, entropy_hw, title):
     plt.close(fig)
 
 
+def entropy_hw_to_inferno_rgb(entropy_hw: np.ndarray) -> np.ndarray:
+    """Normalized entropy (H, W) in [0, 1] → RGB uint8 (inferno, same as _save_entropy_heatmap_png)."""
+    u8 = (np.clip(np.asarray(entropy_hw, dtype=np.float64), 0.0, 1.0) * 255.0).astype(
+        np.uint8
+    )
+    bgr = cv2.applyColorMap(u8, cv2.COLORMAP_INFERNO)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
 def _tab20_segmentation_colors(n_classes):
     """RGB colors used by _save_segmentation_map_png for class ids 0..n_classes-1."""
     if n_classes <= 1:

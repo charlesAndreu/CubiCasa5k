@@ -1,6 +1,11 @@
 const $ = (id) => document.getElementById(id);
 
+const sourcePreset = $("sourcePreset");
+const sourceUpload = $("sourceUpload");
+const planLabel = $("planLabel");
+const uploadLabel = $("uploadLabel");
 const planSelect = $("planSelect");
+const fileInput = $("fileInput");
 const modelSelect = $("modelSelect");
 const runBtn = $("runBtn");
 const statusEl = $("status");
@@ -14,10 +19,17 @@ const images = {
   iconHm: $("imgIconHm"),
   room: $("imgRoom"),
   iconSeg: $("imgIconSeg"),
+  roomEntropy: $("imgRoomEntropy"),
+  iconEntropy: $("imgIconEntropy"),
   postproc: $("imgPostproc"),
 };
 
 let postprocTimer = null;
+let uploadId = null;
+
+function isUploadMode() {
+  return sourceUpload.checked;
+}
 
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || "";
@@ -38,21 +50,63 @@ function modelId() {
 }
 
 function qs(extra = {}) {
-  const p = new URLSearchParams({
-    plan_id: String(planId()),
-    model_id: modelId(),
-    ...extra,
-  });
+  const base = { model_id: modelId() };
+  if (isUploadMode()) {
+    if (!uploadId) throw new Error("Upload an image first");
+    base.upload_id = uploadId;
+  } else {
+    base.plan_id = String(planId());
+  }
+  const p = new URLSearchParams({ ...base, ...extra });
   return p.toString();
 }
 
+function runBody() {
+  const body = { model_id: modelId() };
+  if (isUploadMode()) {
+    if (!uploadId) throw new Error("Upload an image first");
+    body.upload_id = uploadId;
+  } else {
+    body.plan_id = planId();
+  }
+  return body;
+}
+
+function updateSourceUI() {
+  const upload = isUploadMode();
+  planLabel.classList.toggle("hidden", upload);
+  uploadLabel.classList.toggle("hidden", !upload);
+  clearModelOutputs();
+  if (upload) {
+    uploadId = null;
+    images.input.removeAttribute("src");
+  } else {
+    fileInput.value = "";
+    loadInput();
+  }
+  updateButtons();
+}
+
 function loadInput() {
-  const id = planId();
-  images.input.src = cacheBust(`/api/input/${id}.png`);
+  if (isUploadMode()) {
+    if (!uploadId) return;
+    images.input.src = cacheBust(`/api/input.png?upload_id=${uploadId}`);
+    return;
+  }
+  images.input.src = cacheBust(`/api/input/${planId()}.png`);
 }
 
 function clearModelOutputs() {
-  for (const key of ["wall", "opening", "iconHm", "room", "iconSeg", "postproc"]) {
+  for (const key of [
+    "wall",
+    "opening",
+    "iconHm",
+    "room",
+    "iconSeg",
+    "roomEntropy",
+    "iconEntropy",
+    "postproc",
+  ]) {
     images[key].removeAttribute("src");
   }
 }
@@ -62,6 +116,24 @@ async function fetchJson(url, opts) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
+}
+
+async function handleFileSelect() {
+  const file = fileInput.files?.[0];
+  if (!file) return;
+  setStatus(`Uploading ${file.name}…`);
+  const form = new FormData();
+  form.append("image", file);
+  try {
+    const meta = await fetchJson("/api/upload", { method: "POST", body: form });
+    uploadId = meta.upload_id;
+    loadInput();
+    setStatus(`${file.name} (${meta.width}×${meta.height})`);
+    updateButtons();
+  } catch (e) {
+    uploadId = null;
+    setStatus(e.message, true);
+  }
 }
 
 async function init() {
@@ -88,12 +160,14 @@ async function init() {
     setStatus("No checkpoints found under runs_cubi*", true);
   }
 
+  sourcePreset.addEventListener("change", updateSourceUI);
+  sourceUpload.addEventListener("change", updateSourceUI);
   planSelect.addEventListener("change", () => {
     loadInput();
     clearModelOutputs();
     updateButtons();
   });
-
+  fileInput.addEventListener("change", handleFileSelect);
   modelSelect.addEventListener("change", () => {
     clearModelOutputs();
     updateButtons();
@@ -114,12 +188,14 @@ async function init() {
 
 function updateButtons() {
   const hasModel = Boolean(modelId());
-  runBtn.disabled = !hasModel;
-  threshold.disabled = !hasModel;
+  const hasInput = isUploadMode() ? Boolean(uploadId) : true;
+  runBtn.disabled = !hasModel || !hasInput;
+  threshold.disabled = !hasModel || !hasInput;
 }
 
 async function runInference() {
   if (!modelId()) return;
+  if (isUploadMode() && !uploadId) return;
   runBtn.disabled = true;
   setStatus("Running inference (first load may take a minute)…");
 
@@ -127,7 +203,7 @@ async function runInference() {
     const meta = await fetchJson("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan_id: planId(), model_id: modelId() }),
+      body: JSON.stringify(runBody()),
     });
     setStatus(meta.folder || "Done");
 
@@ -137,12 +213,14 @@ async function runInference() {
     images.iconHm.src = cacheBust(`/api/artifact/icon_hm.png?${q}`);
     images.room.src = cacheBust(`/api/artifact/room_seg.png?${q}`);
     images.iconSeg.src = cacheBust(`/api/artifact/icon_seg.png?${q}`);
+    images.roomEntropy.src = cacheBust(`/api/artifact/room_entropy.png?${q}`);
+    images.iconEntropy.src = cacheBust(`/api/artifact/icon_entropy.png?${q}`);
 
     await loadPostproc();
   } catch (e) {
     setStatus(e.message, true);
   } finally {
-    runBtn.disabled = !modelId();
+    updateButtons();
   }
 }
 
@@ -160,7 +238,10 @@ async function loadPostproc() {
     images.postproc.src = cacheBust(
       `/api/postproc.png?${qs({ threshold: thr })}`
     );
-    setStatus(`Ready — ${planSelect.selectedOptions[0]?.textContent || ""}`);
+    const label = isUploadMode()
+      ? fileInput.files?.[0]?.name || "upload"
+      : planSelect.selectedOptions[0]?.textContent || "";
+    setStatus(`Ready — ${label}`);
   } catch (e) {
     setStatus(e.message, true);
   }

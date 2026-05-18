@@ -29,6 +29,7 @@ from inference import VizEngine  # noqa: E402
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB uploads
 engine: VizEngine | None = None
 
 
@@ -38,11 +39,32 @@ def get_engine() -> VizEngine:
         data_path = os.environ.get("CUBI_DATA_PATH", os.path.join(_ROOT, "data", "cubicasa5k"))
         roots = tuple(
             r.strip()
-            for r in os.environ.get("CUBI_RUN_ROOTS", "runs_cubi,runs_cubi_2,runs_cubi_3,runs_cubi_4").split(",")
+            for r in os.environ.get(
+                "CUBI_RUN_ROOTS", "runs_cubi,runs_cubi_2,runs_cubi_3,runs_cubi_4"
+            ).split(",")
             if r.strip()
         )
         engine = VizEngine(data_path=data_path, run_roots=roots)
     return engine
+
+
+def _parse_source(body=None, args=None):
+    """Return (plan_id, upload_id) from JSON body or query args."""
+    upload_id = None
+    plan_id = None
+    if body:
+        upload_id = body.get("upload_id") or None
+        if body.get("plan_id") is not None:
+            plan_id = int(body["plan_id"])
+    if args:
+        upload_id = upload_id or args.get("upload_id") or None
+        if plan_id is None and args.get("plan_id") is not None:
+            plan_id = int(args.get("plan_id"))
+    if upload_id and plan_id is not None:
+        raise ValueError("Specify either plan_id or upload_id, not both")
+    if not upload_id and plan_id is None:
+        raise ValueError("plan_id or upload_id required")
+    return plan_id, upload_id
 
 
 @app.route("/")
@@ -60,10 +82,48 @@ def api_models():
     return jsonify(get_engine().list_models())
 
 
-@app.get("/api/input/<int:plan_id>.png")
-def api_input(plan_id: int):
+@app.post("/api/upload")
+def api_upload():
+    if "image" not in request.files:
+        return jsonify({"error": "Missing form field 'image'"}), 400
+    f = request.files["image"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+    data = f.read()
+    if not data:
+        return jsonify({"error": "Empty file"}), 400
     try:
-        png = get_engine().get_input_png(plan_id)
+        entry = get_engine().store_upload(data, filename=f.filename)
+        h, w = entry.full_res_shape
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(
+        {
+            "ok": True,
+            "upload_id": entry.upload_id,
+            "filename": entry.filename,
+            "height": h,
+            "width": w,
+        }
+    )
+
+
+@app.get("/api/input.png")
+def api_input_query():
+    try:
+        plan_id, upload_id = _parse_source(args=request.args)
+        png = get_engine().get_input_png(plan_id=plan_id, upload_id=upload_id)
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return Response(png, mimetype="image/png")
+
+
+@app.get("/api/input/<int:plan_id>.png")
+def api_input_preset(plan_id: int):
+    try:
+        png = get_engine().get_input_png(plan_id=plan_id)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return Response(png, mimetype="image/png")
@@ -72,12 +132,16 @@ def api_input(plan_id: int):
 @app.post("/api/run")
 def api_run():
     body = request.get_json(force=True, silent=True) or {}
-    plan_id = int(body.get("plan_id", 0))
     model_id = body.get("model_id")
     if not model_id:
         return jsonify({"error": "model_id required"}), 400
     try:
-        run = get_engine().run_inference(plan_id, model_id)
+        plan_id, upload_id = _parse_source(body=body)
+        run = get_engine().run_inference(
+            model_id, plan_id=plan_id, upload_id=upload_id
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify(
@@ -86,20 +150,24 @@ def api_run():
             "folder": run.folder,
             "height": run.full_res_shape[0],
             "width": run.full_res_shape[1],
+            "upload_id": upload_id,
+            "plan_id": plan_id,
         }
     )
 
 
 @app.get("/api/artifact/<name>.png")
 def api_artifact(name: str):
-    plan_id = int(request.args.get("plan_id", 0))
     model_id = request.args.get("model_id")
     if not model_id:
         return jsonify({"error": "model_id query param required"}), 400
     try:
-        png = get_engine().artifact_png(plan_id, model_id, name)
-    except KeyError:
-        return jsonify({"error": f"unknown artifact: {name}"}), 404
+        plan_id, upload_id = _parse_source(args=request.args)
+        png = get_engine().artifact_png(
+            model_id, name, plan_id=plan_id, upload_id=upload_id
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return Response(png, mimetype="image/png")
@@ -107,16 +175,20 @@ def api_artifact(name: str):
 
 @app.get("/api/postproc.png")
 def api_postproc():
-    plan_id = int(request.args.get("plan_id", 0))
     model_id = request.args.get("model_id")
     if not model_id:
         return jsonify({"error": "model_id required"}), 400
     try:
         threshold = float(request.args.get("threshold", 0.25))
-    except ValueError:
-        return jsonify({"error": "invalid threshold"}), 400
-    try:
-        png = get_engine().postproc_png(plan_id, model_id, threshold)
+        plan_id, upload_id = _parse_source(args=request.args)
+        png = get_engine().postproc_png(
+            model_id,
+            threshold,
+            plan_id=plan_id,
+            upload_id=upload_id,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return Response(png, mimetype="image/png")

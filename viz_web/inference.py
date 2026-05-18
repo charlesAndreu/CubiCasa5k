@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from dataclasses import dataclass, field
 
 import cv2
@@ -27,13 +28,18 @@ from eval_full import (  # noqa: E402
     N_HEATMAPS,
     N_ICON_CLASSES,
     N_ROOM_CLASSES,
+    _entropy_from_probs,
     build_combined_map,
     combined_map_colors,
     load_eval_args,
     predict_no_rotation,
     run_postproc_mini,
 )
-from eval_simple import _tab20_segmentation_colors, _tensor_to_bgr_uint8  # noqa: E402
+from eval_simple import (  # noqa: E402
+    _tab20_segmentation_colors,
+    _tensor_to_bgr_uint8,
+    entropy_hw_to_inferno_rgb,
+)
 from floortrans import post_prosessing  # noqa: E402
 from floortrans.loaders.augmentations import DictToTensor  # noqa: E402
 from floortrans.loaders.room_icon_loaders import FullLoader  # noqa: E402
@@ -50,6 +56,24 @@ DEFAULT_DATA_PATH = os.path.join(_ROOT, "data", "cubicasa5k")
 DEFAULT_RUN_ROOTS = ("runs_cubi", "runs_cubi_2", "runs_cubi_3")
 # Longest side of images sent to the browser (native plans are often 600–2000 px).
 DISPLAY_MAX_SIDE = int(os.environ.get("CUBI_VIZ_MAX_SIDE", "560"))
+UPLOAD_MAX_SIDE = int(os.environ.get("CUBI_VIZ_UPLOAD_MAX_SIDE", "2048"))
+
+
+def _image_bytes_to_model_tensor(data: bytes) -> torch.Tensor:
+    """Decode image file bytes → (3, H, W) float in [-1, 1] (same as FullLoader)."""
+    pil = Image.open(io.BytesIO(data))
+    pil = pil.convert("RGB")
+    arr = np.array(pil, dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError("Expected an RGB image")
+    h, w = arr.shape[:2]
+    if max(h, w) > UPLOAD_MAX_SIDE:
+        scale = UPLOAD_MAX_SIDE / float(max(h, w))
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        arr = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    t = torch.from_numpy(arr.transpose(2, 0, 1)).float()
+    return 2.0 * (t / 255.0) - 1.0
 
 
 def _resize_rgb(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> np.ndarray:
@@ -70,6 +94,12 @@ def _png_bytes(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(rgb).save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def _entropy_rgb_from_probs(probs_chw: np.ndarray, n_classes: int) -> np.ndarray:
+    """Softmax probs (C, H, W) → inferno RGB via eval_full + eval_simple helpers."""
+    entropy_hw = _entropy_from_probs(probs_chw, n_classes).numpy()
+    return entropy_hw_to_inferno_rgb(entropy_hw)
 
 
 def _heatmap_max_rgb(planes: np.ndarray) -> np.ndarray:
@@ -105,6 +135,17 @@ def _combined_rgb(combined_hw: np.ndarray) -> np.ndarray:
 
 
 @dataclass
+class UploadedImage:
+    upload_id: str
+    filename: str
+    image_chw: torch.Tensor  # (3, H, W) on CPU
+
+    @property
+    def full_res_shape(self) -> tuple[int, int]:
+        return int(self.image_chw.shape[1]), int(self.image_chw.shape[2])
+
+
+@dataclass
 class CachedRun:
     folder: str
     heatmaps: np.ndarray
@@ -128,7 +169,8 @@ class VizEngine:
         self._lmdb_env = None
         self._loader: FullLoader | None = None
         self._models: dict[str, torch.nn.Module] = {}
-        self._cache: dict[tuple[int, str], CachedRun] = {}
+        self._cache: dict[tuple, CachedRun] = {}
+        self._uploads: dict[str, UploadedImage] = {}
         self._log = logging.getLogger("viz_web")
 
     @staticmethod
@@ -198,26 +240,48 @@ class VizEngine:
         folder = sample["folder"]
         return image, label, folder
 
-    def get_input_png(self, plan_id: int) -> bytes:
-        preset = self._presets[plan_id]
-        image, _, _ = self._load_sample(preset["dataset_index"])
-        bgr = _tensor_to_bgr_uint8(image[0])
+    def _cache_key(self, model_id: str, plan_id: int | None, upload_id: str | None):
+        if upload_id:
+            return ("upload", upload_id, model_id)
+        if plan_id is None:
+            raise ValueError("plan_id or upload_id required")
+        return ("preset", plan_id, model_id)
+
+    def store_upload(self, data: bytes, filename: str = "upload") -> UploadedImage:
+        image_chw = _image_bytes_to_model_tensor(data)
+        upload_id = uuid.uuid4().hex
+        entry = UploadedImage(
+            upload_id=upload_id,
+            filename=filename or "upload",
+            image_chw=image_chw,
+        )
+        self._uploads[upload_id] = entry
+        # Drop cached inference for this upload id if re-uploaded under same id (new id each time).
+        drop = [k for k in self._cache if k[0] == "upload" and k[1] == upload_id]
+        for k in drop:
+            del self._cache[k]
+        return entry
+
+    def get_upload(self, upload_id: str) -> UploadedImage:
+        if upload_id not in self._uploads:
+            raise KeyError(f"Unknown upload_id: {upload_id}")
+        return self._uploads[upload_id]
+
+    def get_input_png(self, plan_id: int | None = None, upload_id: str | None = None) -> bytes:
+        if upload_id:
+            bgr = _tensor_to_bgr_uint8(self.get_upload(upload_id).image_chw)
+        else:
+            preset = self._presets[plan_id]
+            image, _, _ = self._load_sample(preset["dataset_index"])
+            bgr = _tensor_to_bgr_uint8(image[0])
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return _png_bytes(rgb)
 
-    def run_inference(self, plan_id: int, model_id: str) -> CachedRun:
-        key = (plan_id, model_id)
-        if key in self._cache:
-            return self._cache[key]
-
-        preset = self._presets[plan_id]
-        images, label, folder = self._load_sample(preset["dataset_index"])
-        full_h, full_w = label.shape[1], label.shape[2]
-        full_res_shape = (full_h, full_w)
-
+    def _forward_image(self, image_chw: torch.Tensor, model_id: str) -> CachedRun:
+        full_res_shape = (int(image_chw.shape[1]), int(image_chw.shape[2]))
+        images = image_chw.unsqueeze(0).to(self.device)
         model = self._get_model(model_id)
         with torch.no_grad():
-            images = images.to(self.device)
             outputs = predict_no_rotation(model, images, full_res_shape)
         outputs_cpu = outputs.detach().cpu().float()
         heatmaps, rooms, icons = post_prosessing.split_prediction(
@@ -225,11 +289,9 @@ class VizEngine:
         )
         rooms_seg = np.argmax(rooms, axis=0).astype(np.int64)
         icons_seg = np.argmax(icons, axis=0).astype(np.int64)
-
-        input_bgr = _tensor_to_bgr_uint8(images[0].cpu())
-
-        cached = CachedRun(
-            folder=folder,
+        input_bgr = _tensor_to_bgr_uint8(image_chw)
+        return CachedRun(
+            folder="(upload)",
             heatmaps=heatmaps,
             rooms=rooms,
             icons=icons,
@@ -238,23 +300,61 @@ class VizEngine:
             full_res_shape=full_res_shape,
             input_bgr=input_bgr,
         )
+
+    def run_inference(
+        self,
+        model_id: str,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> CachedRun:
+        key = self._cache_key(model_id, plan_id, upload_id)
+        if key in self._cache:
+            return self._cache[key]
+
+        if upload_id:
+            image_chw = self.get_upload(upload_id).image_chw
+            folder = f"upload:{self._uploads[upload_id].filename}"
+        else:
+            preset = self._presets[plan_id]
+            images, label, folder = self._load_sample(preset["dataset_index"])
+            image_chw = images[0].cpu()
+            folder = folder
+
+        cached = self._forward_image(image_chw, model_id)
+        cached.folder = folder
         self._cache[key] = cached
         return cached
 
-    def clear_cache(self, plan_id: int | None = None, model_id: str | None = None):
-        if plan_id is None and model_id is None:
+    def clear_cache(
+        self,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+        model_id: str | None = None,
+    ):
+        if plan_id is None and upload_id is None and model_id is None:
             self._cache.clear()
             return
         drop = []
         for k in self._cache:
-            p, m = k
-            if (plan_id is None or p == plan_id) and (model_id is None or m == model_id):
-                drop.append(k)
+            kind, src_id, m = k
+            if model_id is not None and m != model_id:
+                continue
+            if upload_id is not None and (kind != "upload" or src_id != upload_id):
+                continue
+            if plan_id is not None and (kind != "preset" or src_id != plan_id):
+                continue
+            drop.append(k)
         for k in drop:
             del self._cache[k]
 
-    def artifact_png(self, plan_id: int, model_id: str, name: str) -> bytes:
-        run = self.run_inference(plan_id, model_id)
+    def artifact_png(
+        self,
+        model_id: str,
+        name: str,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         if name == "input":
             rgb = cv2.cvtColor(run.input_bgr, cv2.COLOR_BGR2RGB)
             return _png_bytes(rgb)
@@ -271,10 +371,20 @@ class VizEngine:
             return _png_bytes(_seg_rgb(run.rooms_seg, N_ROOM_CLASSES))
         if name == "icon_seg":
             return _png_bytes(_seg_rgb(run.icons_seg, N_ICON_CLASSES))
+        if name == "room_entropy":
+            return _png_bytes(_entropy_rgb_from_probs(run.rooms, N_ROOM_CLASSES))
+        if name == "icon_entropy":
+            return _png_bytes(_entropy_rgb_from_probs(run.icons, N_ICON_CLASSES))
         raise KeyError(name)
 
-    def postproc_png(self, plan_id: int, model_id: str, threshold: float) -> bytes:
-        run = self.run_inference(plan_id, model_id)
+    def postproc_png(
+        self,
+        model_id: str,
+        threshold: float,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         thr = round(float(threshold), 3)
         if thr not in run.postproc:
             pol_rooms, pol_icons = run_postproc_mini(

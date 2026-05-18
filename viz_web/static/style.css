@@ -51,6 +51,41 @@ h1 {
   border-bottom: 1px solid var(--border);
 }
 
+.source-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.source-fieldset legend {
+  padding: 0 0.25rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: auto;
+  font-size: 0.8rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#fileInput {
+  font-size: 0.75rem;
+  max-width: 220px;
+}
+
 label {
   display: flex;
   flex-direction: column;

@@ -162,22 +162,20 @@ class UncertaintyCustomLoss(nn.Module):
         self.loss_icons = None
         self.loss_heatmap = None
         self.sub = sub
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.log_vars = nn.Parameter(
-            torch.tensor([0, 0], requires_grad=True, dtype=torch.float32).cuda()
-        )
+        self.cuda = cuda and torch.cuda.is_available()
+        self.log_vars = nn.Parameter(torch.zeros(2, dtype=torch.float32))
         self.log_vars_mse = nn.Parameter(
-            torch.zeros(input_slice[0], requires_grad=True, dtype=torch.float32).cuda()
+            torch.zeros(input_slice[0], dtype=torch.float32)
         )
         if room_weight is not None:
             self.register_buffer(
-                "room_weight", room_weight.detach().clone().float().cuda()
+                "room_weight", room_weight.detach().clone().float()
             )
         else:
             self.register_buffer("room_weight", None)
         if icon_weight is not None:
             self.register_buffer(
-                "icon_weight", icon_weight.detach().clone().float().cuda()
+                "icon_weight", icon_weight.detach().clone().float()
             )
         else:
             self.register_buffer("icon_weight", None)
