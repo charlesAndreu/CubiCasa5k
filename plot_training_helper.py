@@ -235,7 +235,9 @@ class TrainingPlotHelper:
             command=self._schedule_draw,
         )
         self.show_lr_check.grid(row=0, column=0, padx=4, pady=(6, 4), sticky="w")
-        ttk.Label(lr_frame, text="Scale").grid(row=1, column=0, padx=4, pady=(2, 6), sticky="w")
+        ttk.Label(lr_frame, text="Scale").grid(
+            row=1, column=0, padx=4, pady=(2, 6), sticky="w"
+        )
         self.lr_scale_var = tk.StringVar(value="real")
         self.lr_scale_combo = ttk.Combobox(
             lr_frame,
@@ -245,7 +247,9 @@ class TrainingPlotHelper:
             width=10,
         )
         self.lr_scale_combo.grid(row=1, column=1, padx=4, pady=(2, 6), sticky="w")
-        self.lr_scale_combo.bind("<<ComboboxSelected>>", lambda _e: self._schedule_draw())
+        self.lr_scale_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._schedule_draw()
+        )
 
         labels_frame = ttk.LabelFrame(left, text="Legend labels (name = label)")
         labels_frame.pack(fill="x", pady=(0, 8))
@@ -444,7 +448,9 @@ class TrainingPlotHelper:
             labels[folder] = name
 
         if not loaded:
-            self.status_var.set("Load skipped: no valid scalar files for current selection.")
+            self.status_var.set(
+                "Load skipped: no valid scalar files for current selection."
+            )
             return
 
         common = set.intersection(*(set(df.columns) for df in loaded.values()))
@@ -528,7 +534,11 @@ class TrainingPlotHelper:
         )
         self.ax.set_ylabel(ylabel, fontsize=13)
         custom_title = self.title_var.get().strip()
-        default_title = " / ".join(display_scalars) if display_scalars else self._display_scalar_name("training/lr")
+        default_title = (
+            " / ".join(display_scalars)
+            if display_scalars
+            else self._display_scalar_name("training/lr")
+        )
         self.ax.set_title(custom_title if custom_title else default_title, fontsize=15)
         self.ax.grid(True, alpha=0.25)
         self.ax.tick_params(axis="both", labelsize=11)
