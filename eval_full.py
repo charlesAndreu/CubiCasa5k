@@ -6,7 +6,7 @@ Mini room layout (4 classes): 0 = background, 1 = outside, 2 = walls, 3 = room
 Mini icon layout (4 classes): 0 = empty,   1 = window, 2 = door, 3 = others
 
 Outputs per run (saved under <run_dir>/):
-  * eval.csv — raw + post-processing @ each swept threshold (no rotation TTA).
+  * eval.csv — raw + post-processing at each swept threshold.
   * eval.json — same metrics in JSON form.
   * confusion_{room|icon}_{raw|postproc}.png / _raw.json (postproc uses best thr).
   * eval_samples_seed42/ — 3 random samples: input, raw room/icon segmentation +
@@ -88,12 +88,12 @@ def combined_map_colors(room_class_colors, n_combined_classes=COMBINED_CLASSES):
         COMBINED_DOOR_RGBA,
     ]
 
-# Post-processing peak thresholds swept without rotation (see diagnose_heatmaps.py).
+# Post-processing peak thresholds swept (see diagnose_heatmaps.py).
 EVAL_THRESHOLDS = [0.20, 0.25, 0.30]
 
 
 def select_best_postproc_threshold(room_runners, icon_runners, thresholds):
-    """Pick threshold maximizing mean of room and icon Mean IoU (no-rotation postproc)."""
+    """Pick threshold maximizing mean of room and icon Mean IoU."""
     best_thr = thresholds[0]
     best_score = -1.0
     for thr in thresholds:
@@ -107,10 +107,10 @@ def select_best_postproc_threshold(room_runners, icon_runners, thresholds):
 
 
 def _eval_row_specs(best_thr):
-    """Raw row, then one post-processing row per swept threshold (no rotation TTA)."""
-    specs = [("no_rotation", None, False)]
+    """Raw row, then one post-processing row per swept threshold."""
+    specs = [("raw", None, False)]
     for thr in EVAL_THRESHOLDS:
-        specs.append((f"{thr:.2f} no_rotation + post_processing", thr, True))
+        specs.append((f"postproc @ {thr:.2f}", thr, True))
     return specs
 
 
@@ -219,8 +219,8 @@ def _resize_pred(pred, target_hw):
     )
 
 
-def predict_no_rotation(model, images, target_hw):
-    """Single forward; returns (1, C, H, W) on device."""
+def predict_at_resolution(model, images, target_hw):
+    """Single forward pass; returns (1, C, H, W) on device."""
     pred = model(images)
     return _resize_pred(pred, target_hw)
 
@@ -374,7 +374,7 @@ def save_sample_raw_pngs(
 
 
 def save_sample_postproc_pngs(out_dir, idx, pol_rooms, pol_icons):
-    """Post-processed maps (no rotation) for a visualized sample."""
+    """Post-processed segmentation PNGs for a visualized sample."""
     if pol_rooms is None and pol_icons is None:
         return
     stem = f"sample_{idx:05d}"
@@ -449,7 +449,7 @@ class FullSegEvaluator:
                 total=len(testloader),
                 ncols=80,
                 leave=False,
-                desc="Eval (no rotation)",
+                desc="Eval",
             ):
                 images = samples["image"].to(
                     self.device, non_blocking=(self.device.type == "cuda")
@@ -458,7 +458,7 @@ class FullSegEvaluator:
                 full_h, full_w = labels.shape[2], labels.shape[3]
                 full_res_shape = (full_h, full_w)
 
-                outputs = predict_no_rotation(self.model, images, full_res_shape)
+                outputs = predict_at_resolution(self.model, images, full_res_shape)
                 rooms_gt = labels[0, N_HEATMAPS].long().numpy()
                 icons_gt = labels[0, N_HEATMAPS + 1].long().numpy()
 

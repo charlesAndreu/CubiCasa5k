@@ -1,10 +1,18 @@
 - runs_cubi/2026-05-17-18:11:17/model_last_epoch.pkl was still progessing after 350 epochs.
-i've resume training at the point it was (initialze all excepted weights, i divided default LR by 4 to have a similar learning rateœ
-)
+i've resume training at the point it was (initialze all excepted weights, i changed LR to 5e-4
 - runs_cubi/2026-05-18-08:33:48 is this resumed training
 - resume training with LR= 5e-5
 - third training was stopped at epoch 116 because of log stability.
 
+=======================================================
+
+- runs_cubi/2026-05-18-21:51:17 new training with 
+    LR= 0.001
+    room_weights_method= inverse_sqrt_frequency
+    icon_weights_method= inverse_double_sqrt_frequency
+- resumed training with LR= 0.00025
+
+=======================================================
 
 - un argument sur le manque d'optimisme de faire la validation sur des 256x256 : 
 quand on fait sur l'image full en validation, on a en général une meilleure loss que le training.

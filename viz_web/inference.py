@@ -32,7 +32,7 @@ from eval_full import (  # noqa: E402
     build_combined_map,
     combined_map_colors,
     load_eval_args,
-    predict_no_rotation,
+    predict_at_resolution,
     run_postproc_mini,
 )
 from eval_simple import (  # noqa: E402
@@ -282,7 +282,7 @@ class VizEngine:
         images = image_chw.unsqueeze(0).to(self.device)
         model = self._get_model(model_id)
         with torch.no_grad():
-            outputs = predict_no_rotation(model, images, full_res_shape)
+            outputs = predict_at_resolution(model, images, full_res_shape)
         outputs_cpu = outputs.detach().cpu().float()
         heatmaps, rooms, icons = post_prosessing.split_prediction(
             outputs_cpu, full_res_shape, INPUT_SLICE

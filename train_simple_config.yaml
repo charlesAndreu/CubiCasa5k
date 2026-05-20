@@ -1,11 +1,11 @@
 # Segmentation target: room or icon
-segmentation_map: icon-mini
+segmentation_map: room
 
 # Model architecture:
 # - null: Furukawa stack
 # - unet_resnet34 / unet_resnet50 / unet_resnet152
 # - segformer: Hugging Face SegFormer
-model: null
+model: segformer
 # HF checkpoint id when model is segformer (ADE fine-tuned heads are replaced for num_labels)
 segformer_model_name: nvidia/segformer-b0-finetuned-ade-512-512
 
@@ -20,7 +20,7 @@ optimizer: adam-patience
 # Loss setup
 # criterrion can be: cross-entropy, cross-entropy-and-dice, focal-loss, cross-entropy-and-tversky, cross-entropy-learned-weights
 criterion: cross-entropy
-weights_method: null # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
+weights_method: inverse_sqrt_frequency # used by weighted versions of the criterion (null,inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num)
 focal_gamma: 2.0 # used when criterion = focal-loss
 dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
 tversky_weight: 1.0 # used when criterion = cross-entropy-and-tversky
@@ -50,6 +50,6 @@ plot_samples: true # log validation image/prediction samples to TensorBoard
 
 # DataLoader / augmentation flags
 debug: false # set true to force num_workers=0
-num_workers: 20
-prefetch_factor: 4
+num_workers: 8
+prefetch_factor: 2
 scale: true # enable resize-padded augmentation branch

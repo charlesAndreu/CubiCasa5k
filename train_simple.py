@@ -28,7 +28,7 @@ TRAIN_SIMPLE_CONFIG_DEFAULTS = {
     "data_path": "data/cubicasa5k/",
     "n_epoch": 400,
     "batch_size": 26,
-    "image_size": 256,
+    "image_size": 512,
     "l_rate": 1e-3,
     "l_rate_drop": 200,
     "patience": 20,

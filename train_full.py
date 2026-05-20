@@ -368,11 +368,17 @@ class Cubicasa5kFullTrainer:
 
         unc = self.criterion.get_uncertainty_scalars()
         log_vars = self.criterion.log_vars.detach().cpu().tolist()
+        log_vars_mse = self.criterion.log_vars_mse.detach().cpu().tolist()
         self.logger.info(
             "Final log_vars [room, icon]: %s  (exp → room_var=%.6f, icon_var=%.6f)",
             log_vars,
             unc["room_var"],
             unc["icon_var"],
+        )
+        self.logger.info(
+            "Final log_vars_mse (%d heatmap channels): %s",
+            len(log_vars_mse),
+            log_vars_mse,
         )
 
         self.tb.close()
