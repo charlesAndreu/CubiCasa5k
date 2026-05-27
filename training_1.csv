@@ -25,7 +25,7 @@ folder_name,name,segmentation_map,model,optimizer,criterion,data_path,n_epoch,ba
 2026-05-03-15:40:15,room-ap-celw-v2-scale,room,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
 2026-05-03-20:25:54,icon-ap-celw-v2-scale,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
 2026-05-08-10:11:03,icon-ap-ce-scale,icon,,adam-patience,cross-entropy,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,,
-2026-05-08-15:20:04,icon-ap-celw-reg02-œscale,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,regularization lambda was 0.2 and not 0.5,
+2026-05-08-15:20:04,icon-ap-celw-reg02-scale,icon,,adam-patience,cross-entropy-learned-weights,data/cubicasa5k/,300,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,,2.0,1.0,,,,,,,regularization lambda was 0.2 and not 0.5,
 2026-05-09-17:33:19,room-ap-cetw-tw05-scale,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,0.5,,0.6
 2026-05-10-00:40:20,room-ap-cetw-tw10-scale,room,,adam-patience,cross-entropy-and-tversky,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,,1.0,,0.6
 2026-05-10-09:15:39,room-ap-segformer-cew-scale,room,segformer,adam-patience,cross-entropy,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,20,4,True,True,inverse_sqrt_frequency,2.0,1.0,,,,0.4,nvidia/segformer-b0-finetuned-ade-512-512,1.0,,0.6

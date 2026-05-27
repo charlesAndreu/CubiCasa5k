@@ -118,6 +118,7 @@ class Weights:
         weights = weights / weights.mean()
         return weights
 
+
 if __name__ == "__main__":
     class_counts = build_class_counts_dict()
     with open("class_counts.json", "w") as f:
