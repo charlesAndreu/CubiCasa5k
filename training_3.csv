@@ -1,5 +1,0 @@
-folder_name,name,optimizer,room_weights_method,icon_weights_method,data_path,n_epoch,batch_size,image_size,l_rate,l_rate_drop,patience,furukawa_weights,resume_from,log_path,debug,num_workers,prefetch_factor,plot_samples,scale,amp
-2026-05-14-15:54:19,,adam-patience,,,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,8,2,True,True,True
-2026-05-14-20:19:28,,adam-patience,inverse_sqrt_frequency,inverse_double_sqrt_frequency,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,8,2,True,True,
-2026-05-15-07:38:38,,adam-patience,inverse_sqrt_frequency,inverse_sqrt_frequency,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,8,2,True,True,
-2026-05-15-12:03:28,,adam-patience,inverse_double_sqrt_frequency,inverse_double_sqrt_frequency,data/cubicasa5k/,350,26,256,0.001,200,20,,,runs_cubi/,False,8,2,True,True,

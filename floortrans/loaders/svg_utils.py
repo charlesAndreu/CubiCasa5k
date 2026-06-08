@@ -1,8 +1,9 @@
 import math
+from logging import warning
+
 import numpy as np
 from skimage.draw import polygon
 from svgpathtools import parse_path
-from logging import warning
 
 
 def get_room_number(e, rooms):
@@ -12,7 +13,7 @@ def get_room_number(e, rooms):
         return rooms[room_type]
     except KeyError:
         warning("Room type " + e.getAttribute("class") + " not defined.")
-        return rooms['Undefined']
+        return rooms["Undefined"]
 
 
 def get_icon_number(e, icons):
@@ -23,26 +24,24 @@ def get_icon_number(e, icons):
         return icons[icon_type]
     except KeyError:
         warning("Icon type " + e.getAttribute("class") + " not defined.")
-        return icons['Misc']
+        return icons["Misc"]
 
 
 def get_icon(ee):
     parent_transform = None
     if ee.parentNode.getAttribute("class") == "FixedFurnitureSet":
         parent_transform = ee.parentNode.getAttribute("transform")
-        strings = parent_transform.split(',')
+        strings = parent_transform.split(",")
         a_p = float(strings[0][7:])
         b_p = float(strings[1])
         c_p = float(strings[2])
         d_p = float(strings[3])
         e_p = float(strings[-2])
         f_p = float(strings[-1][:-1])
-        M_p = np.array([[a_p, c_p, e_p],
-                        [b_p, d_p, f_p],
-                        [0, 0, 1]])
+        M_p = np.array([[a_p, c_p, e_p], [b_p, d_p, f_p], [0, 0, 1]])
 
     transform = ee.getAttribute("transform")
-    strings = transform.split(',')
+    strings = transform.split(",")
     a = float(strings[0][7:])
     b = float(strings[1])
     c = float(strings[2])
@@ -50,16 +49,17 @@ def get_icon(ee):
     e = float(strings[-2])
     f = float(strings[-1][:-1])
 
-    M = np.array([[a, c, e],
-                  [b, d, f],
-                  [0, 0, 1]])
+    M = np.array([[a, c, e], [b, d, f], [0, 0, 1]])
 
     X = np.array([])
     Y = np.array([])
 
     try:
-        toilet = next(p for p in ee.childNodes if p.nodeName ==
-                      'g' and p.getAttribute("class") == "BoundaryPolygon")
+        toilet = next(
+            p
+            for p in ee.childNodes
+            if p.nodeName == "g" and p.getAttribute("class") == "BoundaryPolygon"
+        )
 
         for p in toilet.childNodes:
             if p.nodeName == "polygon":
@@ -71,7 +71,7 @@ def get_icon(ee):
 
             X, Y = get_max_corners(points)
             # if p.nodeName == "path":
-                # X, Y = get_icon_path(p)
+            # X, Y = get_icon_path(p)
 
     except StopIteration:
         X, Y = make_boudary_polygon(ee)
@@ -96,34 +96,35 @@ def get_icon(ee):
 
     return rr, cc, X, Y
 
+
 def get_corners(g):
     x_all, y_all = [], []
     for pol in g.childNodes:
-        if pol.nodeName == 'polygon':
+        if pol.nodeName == "polygon":
             x, y = get_icon_polygon(pol)
             x_all = np.append(x_all, x)
             y_all = np.append(y_all, y)
-        elif pol.nodeName == 'path':
+        elif pol.nodeName == "path":
             x, y = get_icon_path(pol)
             x_all = np.append(x_all, x)
             y_all = np.append(y_all, y)
-        elif pol.nodeName == 'rect':
-            x = pol.getAttribute('x')
-            if x == '':
+        elif pol.nodeName == "rect":
+            x = pol.getAttribute("x")
+            if x == "":
                 x = 1.0
             else:
                 x = float(x)
-            y = pol.getAttribute('y')
-            if y == '':
+            y = pol.getAttribute("y")
+            if y == "":
                 y = 1.0
             else:
                 y = float(y)
             x_all = np.append(x_all, x)
             y_all = np.append(y_all, y)
-            w = float(pol.getAttribute('width'))
-            h = float(pol.getAttribute('height'))
-            x_all = np.append(x_all, x+w)
-            y_all = np.append(y_all, y+h)
+            w = float(pol.getAttribute("width"))
+            h = float(pol.getAttribute("height"))
+            x_all = np.append(x_all, x + w)
+            y_all = np.append(y_all, y + h)
 
     return x_all, y_all
 
@@ -153,7 +154,7 @@ def get_max_corners(points):
 
 
 def make_boudary_polygon(pol):
-    g_gen = (c for c in pol.childNodes if c.nodeName == 'g')
+    g_gen = (c for c in pol.childNodes if c.nodeName == "g")
 
     x_all, y_all = [], []
     for g in g_gen:
@@ -187,7 +188,7 @@ def get_icon_path(pol):
 
 
 def get_icon_polygon(pol):
-    points = pol.getAttribute("points").split(' ')
+    points = pol.getAttribute("points").split(" ")
 
     return get_XY(points)
 
@@ -202,11 +203,11 @@ def get_XY(points):
     X, Y = np.array([]), np.array([])
     i = 0
     for a in points:
-        if ',' in a:
+        if "," in a:
             if len(a) == 2:
-                x, y = a.split(',')
+                x, y = a.split(",")
             else:
-                num_list = a.split(',')
+                num_list = a.split(",")
                 x, y = num_list[0], num_list[1]
             X = np.append(X, np.round(float(x)))
             Y = np.append(Y, np.round(float(y)))
@@ -224,12 +225,12 @@ def get_XY(points):
 
 def get_points(e):
     pol = next(p for p in e.childNodes if p.nodeName == "polygon")
-    points = pol.getAttribute("points").split(' ')
+    points = pol.getAttribute("points").split(" ")
     points = points[:-1]
 
     X, Y = np.array([]), np.array([])
     for a in points:
-        x, y = a.split(',')
+        x, y = a.split(",")
         X = np.append(X, np.round(float(x)))
         Y = np.append(Y, np.round(float(y)))
 
@@ -248,12 +249,12 @@ def get_direction(X, Y):
 
 def get_polygon(e):
     pol = next(p for p in e.childNodes if p.nodeName == "polygon")
-    points = pol.getAttribute("points").split(' ')
+    points = pol.getAttribute("points").split(" ")
     points = points[:-1]
 
     X, Y = np.array([]), np.array([])
     for a in points:
-        y, x = a.split(',')
+        y, x = a.split(",")
         X = np.append(X, np.round(float(x)))
         Y = np.append(Y, np.round(float(y)))
 
@@ -263,8 +264,9 @@ def get_polygon(e):
 
 
 def calc_distance(point_1, point_2):
-    return math.sqrt(math.pow(point_1[0] - point_2[0], 2) +
-                     math.pow(point_1[1] - point_2[1], 2))
+    return math.sqrt(
+        math.pow(point_1[0] - point_2[0], 2) + math.pow(point_1[1] - point_2[1], 2)
+    )
 
 
 def get_gaussian2D(ndim, sigma=0.25):
@@ -287,7 +289,7 @@ def draw_junction(index, point, width, height, axes):
     lineLength = 15
     lineWidth = 7
     x, y = point[0]
-    axes.text(x, y, str(index), fontsize=15, color='k')
+    axes.text(x, y, str(index), fontsize=15, color="k")
     ###########################
     # o
     # | #6488ea soft blue
@@ -295,8 +297,12 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     if point[2][1] == 1 and point[2][2] == 1:
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='#6488ea')
+        axes.plot(
+            [x, x],
+            [y, min(y + lineLength, height - 1)],
+            linewidth=lineWidth,
+            color="#6488ea",
+        )
     ###########################
     #
     #  ---o #6241c7 bluey purple
@@ -304,8 +310,9 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 1 and point[2][2] == 2:
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='#6241c7')
+        axes.plot(
+            [x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="#6241c7"
+        )
     ###########################
     #    |
     #    | drawcode = [1,3]
@@ -313,8 +320,9 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 1 and point[2][2] == 3:
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='#056eee')
+        axes.plot(
+            [x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="#056eee"
+        )
     ###########################
     #
     #  drawcode = [1,4]
@@ -323,8 +331,12 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 1 and point[2][2] == 4:
-        axes.plot([x, min(x + lineLength, width - 1)], [y, y],
-                  linewidth=lineWidth, color='#004577')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)],
+            [y, y],
+            linewidth=lineWidth,
+            color="#004577",
+        )
     ###########################
     #
     # |--- drawcode = [2,3]
@@ -332,10 +344,18 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 2 and point[2][2] == 3:
-        axes.plot([x, min(x + lineLength, width - 1)], [y, y],
-                  linewidth=lineWidth, color='#04d8b2')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='#04d8b2')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)],
+            [y, y],
+            linewidth=lineWidth,
+            color="#04d8b2",
+        )
+        axes.plot(
+            [x, x],
+            [y, min(y + lineLength, height - 1)],
+            linewidth=lineWidth,
+            color="#04d8b2",
+        )
     ###########################
     #
     #  ---|
@@ -343,10 +363,15 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 2 and point[2][2] == 4:
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='#cdfd02')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='#cdfd02')
+        axes.plot(
+            [x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="#cdfd02"
+        )
+        axes.plot(
+            [x, x],
+            [y, min(y + lineLength, height - 1)],
+            linewidth=lineWidth,
+            color="#cdfd02",
+        )
     ###########################
     #    |
     # ---| drawcode = [2,1]
@@ -354,10 +379,12 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 2 and point[2][2] == 1:
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='#ff81c0')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='#ff81c0')
+        axes.plot(
+            [x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="#ff81c0"
+        )
+        axes.plot(
+            [x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="#ff81c0"
+        )
     ###########################
     #
     #  |
@@ -366,10 +393,15 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 2 and point[2][2] == 2:
-        axes.plot([x, min(x + lineLength, width - 1)], [y, y],
-                  linewidth=lineWidth, color='#f97306')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='#f97306')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)],
+            [y, y],
+            linewidth=lineWidth,
+            color="#f97306",
+        )
+        axes.plot(
+            [x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="#f97306"
+        )
     ###########################
     #
     # |
@@ -378,12 +410,13 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 3 and point[2][2] == 4:
-        axes.plot([x, min(x + lineLength, width - 1)],
-                  [y, y], linewidth=lineWidth, color='b')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='b')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='b')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)], [y, y], linewidth=lineWidth, color="b"
+        )
+        axes.plot([x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="b")
+        axes.plot(
+            [x, x], [y, min(y + lineLength, height - 1)], linewidth=lineWidth, color="b"
+        )
     ###########################
     #
     # ---
@@ -392,12 +425,13 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 3 and point[2][2] == 1:
-        axes.plot([x, min(x + lineLength, width - 1)],
-                  [y, y], linewidth=lineWidth, color='y')
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='y')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='y')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)], [y, y], linewidth=lineWidth, color="y"
+        )
+        axes.plot([x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="y")
+        axes.plot(
+            [x, x], [y, min(y + lineLength, height - 1)], linewidth=lineWidth, color="y"
+        )
     ###########################
     #
     #    |
@@ -406,12 +440,11 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 3 and point[2][2] == 2:
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='r')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='r')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='r')
+        axes.plot([x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="r")
+        axes.plot([x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="r")
+        axes.plot(
+            [x, x], [y, min(y + lineLength, height - 1)], linewidth=lineWidth, color="r"
+        )
     ###########################
     #
     #  |
@@ -420,12 +453,11 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 3 and point[2][2] == 3:
-        axes.plot([x, min(x + lineLength, width - 1)],
-                  [y, y], linewidth=lineWidth, color='m')
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='m')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='m')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)], [y, y], linewidth=lineWidth, color="m"
+        )
+        axes.plot([x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="m")
+        axes.plot([x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="m")
     ###########################
     #
     #  |
@@ -434,14 +466,14 @@ def draw_junction(index, point, width, height, axes):
     #
     ###########################
     elif point[2][1] == 4 and point[2][2] == 1:
-        axes.plot([x, min(x + lineLength, width - 1)],
-                  [y, y], linewidth=lineWidth, color='k')
-        axes.plot([x, max(x - lineLength, 0)], [y, y],
-                  linewidth=lineWidth, color='k')
-        axes.plot([x, x], [y, max(y - lineLength, 0)],
-                  linewidth=lineWidth, color='k')
-        axes.plot([x, x], [y, min(y + lineLength, height - 1)],
-                  linewidth=lineWidth, color='k')
+        axes.plot(
+            [x, min(x + lineLength, width - 1)], [y, y], linewidth=lineWidth, color="k"
+        )
+        axes.plot([x, max(x - lineLength, 0)], [y, y], linewidth=lineWidth, color="k")
+        axes.plot([x, x], [y, max(y - lineLength, 0)], linewidth=lineWidth, color="k")
+        axes.plot(
+            [x, x], [y, min(y + lineLength, height - 1)], linewidth=lineWidth, color="k"
+        )
 
 
 class Wall:
@@ -454,10 +486,10 @@ class Wall:
         self.min_width = width
 
     def change_end_points(self):
-        if self.direction == 'V':
+        if self.direction == "V":
             self.end_points[0][0] = np.mean(np.array(self.min_coord))
             self.end_points[1][0] = self.end_points[0][0]
-        elif self.direction == 'H':
+        elif self.direction == "H":
             self.end_points[0][1] = np.mean(np.array(self.min_coord))
             self.end_points[1][1] = self.end_points[0][1]
 
@@ -473,9 +505,9 @@ class LineWall(Wall):
 class PolygonWall(Wall):
     def __init__(self, e, id, shape=None):
         self.id = id
-        self.name = e.getAttribute('id')
+        self.name = e.getAttribute("id")
         self.X, self.Y = self.get_points(e)
-        if abs(max(self.X)-min(self.X)) < 4 or abs(max(self.Y)-min(self.Y)) < 4:
+        if abs(max(self.X) - min(self.X)) < 4 or abs(max(self.Y) - min(self.Y)) < 4:
             # wall is too small and we ignore it.
             raise ValueError("small wall")
         if shape:
@@ -495,12 +527,12 @@ class PolygonWall(Wall):
 
     def get_points(self, e):
         pol = next(p for p in e.childNodes if p.nodeName == "polygon")
-        points = pol.getAttribute("points").split(' ')
+        points = pol.getAttribute("points").split(" ")
         points = points[:-1]
 
         X, Y = np.array([]), np.array([])
         for a in points:
-            x, y = a.split(',')
+            x, y = a.split(",")
             X = np.append(X, np.round(float(x)))
             Y = np.append(Y, np.round(float(y)))
 
@@ -521,9 +553,9 @@ class PolygonWall(Wall):
     def get_width(self, X, Y, direction):
         _, _, p1, p2 = self._get_min_points(X, Y)
 
-        if direction == 'H':
+        if direction == "H":
             return (abs(p1[0][1] - p1[1][1]) + abs(p2[0][1] - p2[1][1])) / 2
-        elif 'V':
+        elif "V":
             return (abs(p1[0][0] - p1[1][0]) + abs(p2[0][0] - p2[1][0])) / 2
 
     def _width(self, values):
@@ -561,7 +593,7 @@ class PolygonWall(Wall):
 
     def _get_overlap(self, a, b):
         return max(0, min(a[1], b[1]) - max(a[0], b[0]))
-        
+
     def merge_walls(self, merged):
         max_dist = max([self.max_width, merged.max_width])
 
@@ -571,7 +603,6 @@ class PolygonWall(Wall):
         # walls have to be in the same direction
         if self.direction != merged.direction:
             return None
-
 
         # If endpoints are near
         # self up and left endpoint to merged down and right end point
@@ -606,7 +637,7 @@ class PolygonWall(Wall):
             x1, y1 = X[i], Y[i]
             x2, y2 = X[(i + 1) % 4], Y[(i + 1) % 4]
 
-            dist = np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+            dist = np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
             if dist < min_dist1:
                 point2 = point1
                 point1 = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
@@ -667,12 +698,10 @@ class PolygonWall(Wall):
 
         if direction == 0:
             # merged wall is up or left to the original wall
-            self.end_points = np.array(
-                [merged.end_points[0], self.end_points[1]])
+            self.end_points = np.array([merged.end_points[0], self.end_points[1]])
         else:
             # merged wall is down or right to the original wall
-            self.end_points = np.array(
-                [self.end_points[0], merged.end_points[1]])
+            self.end_points = np.array([self.end_points[0], merged.end_points[1]])
 
         self.length = self.get_length(self.end_points)
 
@@ -692,7 +721,7 @@ class PolygonWall(Wall):
         return [width_1, width_2]
 
     def get_width_coods(self, X, Y):
-        if self.direction == 'H':
+        if self.direction == "H":
             dist_1 = abs(Y[0] - Y[2])
             dist_2 = abs(Y[1] - Y[3])
             if dist_1 < dist_2:
@@ -700,7 +729,7 @@ class PolygonWall(Wall):
             else:
                 return [Y[1], Y[3]], [Y[0], Y[2]]
 
-        elif self.direction == 'V':
+        elif self.direction == "V":
             dist_1 = abs(X[0] - X[3])
             dist_2 = abs(X[1] - X[2])
             if dist_1 < dist_2:
@@ -715,8 +744,7 @@ class PolygonWall(Wall):
         min_y = min(Y)
         res_X, res_Y = [0] * 4, [0] * 4
         # top left 0, top right 1, bottom left 2, bottom right 3
-        directions = [[min_x, min_y], [max_x, min_y],
-                      [min_x, max_y], [max_x, max_y]]
+        directions = [[min_x, min_y], [max_x, min_y], [min_x, max_y], [max_x, max_y]]
         length = len(X)
         for i in range(length):
             min_dist = 1000000
@@ -741,8 +769,12 @@ class PolygonWall(Wall):
 
     def split_pillar_wall(self, ids, avg_wall_width):
         half = avg_wall_width / 3.0
-        end_points = [[[0, 0], [0, 0]], [[0, 0], [0, 0]],
-                      [[0, 0], [0, 0]], [[0, 0], [0, 0]]]
+        end_points = [
+            [[0, 0], [0, 0]],
+            [[0, 0], [0, 0]],
+            [[0, 0], [0, 0]],
+            [[0, 0], [0, 0]],
+        ]
         self.X[np.argmax(self.X)] = max(self.X) - half
         self.X[np.argmax(self.X)] = max(self.X) - half
         self.X[np.argmin(self.X)] = min(self.X) + half
@@ -763,10 +795,10 @@ class PolygonWall(Wall):
         for i, e in enumerate(end_points):
             if abs(e[0][1] - e[1][1]) > abs(e[0][0] - e[1][0]):
                 # vertical wall
-                direction = 'V'
+                direction = "V"
             else:
                 # horizontal wall
-                direction = 'H'
+                direction = "H"
 
             e = self.sort_end_points(direction, e[0], e[1])
             wall = LineWall(ids + i, e, direction, avg_wall_width / 2.0, self.name)

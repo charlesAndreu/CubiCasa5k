@@ -1,23 +1,3 @@
-"""
-Test-set evaluation for the full Cubicasa5k model
-(21 heatmap channels + 4 room logits + 4 icon logits = 29 output channels).
-
-Mini room layout (4 classes): 0 = background, 1 = outside, 2 = walls, 3 = room
-Mini icon layout (4 classes): 0 = empty,   1 = window, 2 = door, 3 = others
-
-Outputs per run (saved under <run_dir>/):
-  * eval.csv — raw + post-processing at each swept threshold.
-  * eval.json — same metrics in JSON form.
-  * confusion_{room|icon}_{raw|postproc}.png / _raw.json (postproc uses best thr).
-  * eval_samples_seed42/ — 3 random samples: input, raw room/icon segmentation +
-    combined map, room/icon entropy heatmaps, and postproc PNGs at the best threshold.
-
-Test images are processed at native (LMDB) resolution. The fully-convolutional
-Furukawa model accepts arbitrary sizes; predictions are bilinearly resampled
-back to the ground-truth resolution via post_prosessing.split_prediction
-before metrics and post-processing run.
-"""
-
 import csv
 import json
 import logging
@@ -62,7 +42,6 @@ from floortrans.post_prosessing import (
 from model import cubi_casa5k_full_model
 from train_full import TRAIN_FULL_CONFIG_DEFAULTS
 
-
 N_HEATMAPS = 21
 N_ROOM_CLASSES = 4  # 0=background, 1=outside, 2=walls, 3=room
 N_ICON_CLASSES = 4  # 0=empty, 1=window, 2=door, 3=others
@@ -88,7 +67,8 @@ def combined_map_colors(room_class_colors, n_combined_classes=COMBINED_CLASSES):
         COMBINED_DOOR_RGBA,
     ]
 
-# Post-processing peak thresholds swept (see diagnose_heatmaps.py).
+
+# Post-processing peak thresholds.
 EVAL_THRESHOLDS = [0.20, 0.25, 0.30]
 
 
@@ -214,9 +194,7 @@ def _resize_pred(pred, target_hw):
     if pred.shape[-2:] == target_hw:
         return pred
     # align_corners=False matches floortrans.post_prosessing.split_prediction
-    return F.interpolate(
-        pred, size=target_hw, mode="bilinear", align_corners=False
-    )
+    return F.interpolate(pred, size=target_hw, mode="bilinear", align_corners=False)
 
 
 def predict_at_resolution(model, images, target_hw):
@@ -240,12 +218,8 @@ def run_postproc_mini(heatmaps, rooms, icons, full_res_shape, threshold):
         full_res_shape,
         split=[N_ROOM_CLASSES, N_ICON_CLASSES],
     )
-    pol_rooms = np.argmax(predicted_classes[:N_ROOM_CLASSES], axis=0).astype(
-        np.int64
-    )
-    pol_icons = np.argmax(predicted_classes[N_ROOM_CLASSES:], axis=0).astype(
-        np.int64
-    )
+    pol_rooms = np.argmax(predicted_classes[:N_ROOM_CLASSES], axis=0).astype(np.int64)
+    pol_icons = np.argmax(predicted_classes[N_ROOM_CLASSES:], axis=0).astype(np.int64)
     return pol_rooms, pol_icons
 
 
@@ -425,12 +399,8 @@ class FullSegEvaluator:
 
         running_room_raw = runningScore(N_ROOM_CLASSES)
         running_icon_raw = runningScore(N_ICON_CLASSES)
-        running_room_pp = {
-            t: runningScore(N_ROOM_CLASSES) for t in EVAL_THRESHOLDS
-        }
-        running_icon_pp = {
-            t: runningScore(N_ICON_CLASSES) for t in EVAL_THRESHOLDS
-        }
+        running_room_pp = {t: runningScore(N_ROOM_CLASSES) for t in EVAL_THRESHOLDS}
+        running_icon_pp = {t: runningScore(N_ICON_CLASSES) for t in EVAL_THRESHOLDS}
         n_samples = len(testloader.dataset)
         rng = np.random.default_rng(42)
         k_vis = min(3, n_samples)
@@ -555,8 +525,12 @@ class FullSegEvaluator:
             "vis_dir": vis_dir,
             "confusion_room_raw": running_room_raw.confusion_matrix.copy(),
             "confusion_icon_raw": running_icon_raw.confusion_matrix.copy(),
-            "confusion_room_postproc": running_room_pp[best_thr].confusion_matrix.copy(),
-            "confusion_icon_postproc": running_icon_pp[best_thr].confusion_matrix.copy(),
+            "confusion_room_postproc": running_room_pp[
+                best_thr
+            ].confusion_matrix.copy(),
+            "confusion_icon_postproc": running_icon_pp[
+                best_thr
+            ].confusion_matrix.copy(),
             "running_room_raw": running_room_raw,
             "running_icon_raw": running_icon_raw,
             "running_room_pp": running_room_pp,

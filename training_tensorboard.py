@@ -9,21 +9,18 @@ import torch
 
 
 def _tb_finite_float(x):
-    """Plain float for TensorBoard; None if NaN/Inf (metrics often NaN per-class on small val sets)."""
     v = float(np.asarray(x).reshape(-1)[0])
     if not math.isfinite(v):
         return None
     return v
 
 
-def _pred_heatmap_sum_display(arr, noise_percentile = 30.0):
-    """Display only: subtract a low percentile so near-uniform sigmoid-sum noise maps closer to zero."""
+def _pred_heatmap_sum_display(arr, noise_percentile=30.0):
     lo = float(np.percentile(arr, noise_percentile))
     return np.maximum(arr - lo, 0.0)
 
 
 def _figure_heatmap_sum(map_hw):
-    """Single 2D map (e.g. sum over heatmap channels) for TensorBoard add_figure."""
     fig, ax = plt.subplots(figsize=(10, 8))
     vmax = max(float(map_hw.max()), 1e-6)
     im = ax.imshow(map_hw, vmin=0.0, vmax=vmax, cmap="magma", aspect="equal")
@@ -34,7 +31,6 @@ def _figure_heatmap_sum(map_hw):
 
 
 class SimpleTrainingTensorBoard:
-    """Wraps a SummaryWriter (or None when logging is disabled)."""
 
     def __init__(self, writer):
         self.writer = writer
@@ -260,7 +256,11 @@ class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
                 # room and icon predictions plots
                 for head, slc, vmax in (
                     ("room", slice(n_hm, room_logit_end), n_room - 1),
-                    ("icon", slice(room_logit_end, room_logit_end + n_icon), n_icon - 1),
+                    (
+                        "icon",
+                        slice(room_logit_end, room_logit_end + n_icon),
+                        n_icon - 1,
+                    ),
                 ):
                     pred_map = outputs[0, slc].argmax(dim=0).detach().cpu().numpy()
                     fig = plt.figure(figsize=(18, 12))

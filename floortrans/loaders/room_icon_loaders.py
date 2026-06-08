@@ -2,8 +2,8 @@ import os
 import pickle
 
 import numpy as np
-from numpy import genfromtxt
 import torch
+from numpy import genfromtxt
 from torch.utils.data import Dataset
 from torchvision.transforms import RandomChoice
 
@@ -16,7 +16,7 @@ from floortrans.loaders.augmentations import (
     ResizePaddedTorch,
 )
 
-# Reduced ("mini") label spaces — keep here to avoid circular imports with dataloader.
+# Reduced ("mini") label spaces - keep here to avoid circular imports with dataloader.
 # LMDB room raster uses 12 classes (see floortrans.plotting.segmentation_plot).
 # Mini room: 0=background, 1=outside, 2=walls, 3=room (all room types merged).
 ROOM_MINI_MAPPING = {

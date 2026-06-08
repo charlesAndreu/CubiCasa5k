@@ -1,18 +1,11 @@
 import json
 import os
 import pickle
-import torch
+
 import lmdb
 import numpy as np
+import torch
 from tqdm import tqdm
-
-from floortrans.loaders.room_icon_loaders import (
-    ICON_MINI_DEFAULT_CLASS,
-    ICON_MINI_MAPPING,
-    N_ROOM_MINI_CLASSES,
-    ROOM_MINI_DEFAULT_CLASS,
-    ROOM_MINI_MAPPING,
-)
 
 # Must match train_simple.py / segmentation heads
 N_ROOM_CLASSES = 12

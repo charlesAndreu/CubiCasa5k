@@ -3,17 +3,16 @@ import os
 import lmdb
 from torch.utils.data import DataLoader
 
-
+from floortrans.loaders.augmentations import Compose, DictToTensor
 from floortrans.loaders.room_icon_loaders import (
-    RoomLoader,
-    IconLoader,
     FullLoader,
+    IconLoader,
+    RoomLoader,
     build_full_train_augmentations,
     build_full_val_augmentations,
     build_simple_train_augmentations,
     build_simple_val_augmentations,
 )
-from floortrans.loaders.augmentations import Compose, DictToTensor
 
 
 def n_segmentation_classes(segmentation_map):
@@ -106,7 +105,11 @@ def build_cubicasa5k_full_dataloaders(args, device, logger):
     train_aug = build_full_train_augmentations(args)
     val_aug = build_full_val_augmentations(args)
     logger.info("Loading full data (heatmaps + room + icon)...")
-    logger.info("Train at %sx%s; validation at native LMDB resolution", args.image_size, args.image_size)
+    logger.info(
+        "Train at %sx%s; validation at native LMDB resolution",
+        args.image_size,
+        args.image_size,
+    )
     train_set = FullLoader(
         args.data_path, "train.txt", lmdb_env, augmentations=train_aug
     )
@@ -155,9 +158,8 @@ def build_cubicasa5k_full_eval_dataloaders(args, device):
 
 def build_cubicasa5k_full_eval_dataloaders_native_res(args, device):
     """
-    Test dataloader for full models at native (LMDB) image resolution.
-    No resize/pad — only DictToTensor rasterises heatmap points. batch_size=1
-    (variable image sizes mean any larger batch would require collation/padding).
+    Test dataloader for full models at native image resolution.
+    No resize/pad - only DictToTensor rasterises heatmap points. batch_size=1
     """
     root = args.data_path.rstrip(os.sep)
     lmdb_path = os.path.join(root, "cubi_lmdb")

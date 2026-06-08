@@ -11,10 +11,6 @@ def _optimizer_parameters(model, criterion):
 
 
 def build_optimizer_and_scheduler(args, model, criterion):
-    """
-    Build (optimizer, scheduler) from config. scheduler is None for
-    adam-patience-previous-best (that path handles LR in the training loop).
-    """
     params = _optimizer_parameters(model, criterion)
     name = args.optimizer
     # adam-patience: Adam + ReduceLROnPlateau on val loss
@@ -29,7 +25,7 @@ def build_optimizer_and_scheduler(args, model, criterion):
             optimizer, "min", patience=args.patience, factor=0.5
         )
         return optimizer, scheduler
-    
+
     # adam-patience-previous-best: Adam + manual patience logic
     # (reload best checkpoint + reduce LR by x0.1 after plateau)
     if name == "adam-patience-previous-best":
@@ -69,8 +65,6 @@ def build_optimizer_and_scheduler(args, model, criterion):
             eps=1e-8,
             betas=(0.9, 0.999),
         )
-        scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lr_lambda=lr_drop_adam
-        )
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop_adam)
         return optimizer, scheduler
     raise ValueError(f"Invalid optimizer: {name}")

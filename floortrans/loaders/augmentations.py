@@ -1,9 +1,11 @@
-import torch
 import random
-import numpy as np
 from math import inf
-from floortrans.loaders import svg_utils
+
 import cv2
+import numpy as np
+import torch
+
+from floortrans.loaders import svg_utils
 
 
 class Compose(object):

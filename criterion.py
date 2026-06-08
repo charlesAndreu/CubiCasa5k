@@ -1,9 +1,12 @@
 import json
 
+import pandas as pd
+import segmentation_models_pytorch as smp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import segmentation_models_pytorch as smp
+from torch.nn.functional import cross_entropy, interpolate, mse_loss
+
 from floortrans.loaders.room_icon_loaders import (
     ICON_MINI_DEFAULT_CLASS,
     ICON_MINI_MAPPING,
@@ -16,9 +19,6 @@ from weight import (
     Weights,
     aggregate_full_counts_to_mini,
 )
-
-from torch.nn.functional import mse_loss, cross_entropy, interpolate
-import pandas as pd
 
 
 def _class_weights_tensor(args, segmentation_map, logger, weights_method=None):
@@ -52,7 +52,9 @@ def _class_weights_tensor(args, segmentation_map, logger, weights_method=None):
 
     counts = torch.tensor(counts_list, dtype=torch.float32)
     weights = Weights(counts).weights(method=method)
-    logger.info("Setting up %s loss weights for %s: %s", method, segmentation_map, weights)
+    logger.info(
+        "Setting up %s loss weights for %s: %s", method, segmentation_map, weights
+    )
     return weights
 
 
@@ -168,15 +170,11 @@ class UncertaintyCustomLoss(nn.Module):
             torch.zeros(input_slice[0], dtype=torch.float32)
         )
         if room_weight is not None:
-            self.register_buffer(
-                "room_weight", room_weight.detach().clone().float()
-            )
+            self.register_buffer("room_weight", room_weight.detach().clone().float())
         else:
             self.register_buffer("room_weight", None)
         if icon_weight is not None:
-            self.register_buffer(
-                "icon_weight", icon_weight.detach().clone().float()
-            )
+            self.register_buffer("icon_weight", icon_weight.detach().clone().float())
         else:
             self.register_buffer("icon_weight", None)
 
@@ -269,13 +267,13 @@ class UncertaintyCustomLoss(nn.Module):
     def get_loss_scalars(self) -> dict:
         """Plain float scalars for each loss component (no pandas dependency)."""
         return {
-            "total":       float(self.loss.item()),
-            "rooms":       float(self.loss_rooms.item()),
-            "icons":       float(self.loss_icons.item()),
-            "heatmap":     float(self.loss_heatmap.item()),
-            "total_var":   float(self.loss_var.item()),
-            "rooms_var":   float(self.loss_rooms_var.item()),
-            "icons_var":   float(self.loss_icons_var.item()),
+            "total": float(self.loss.item()),
+            "rooms": float(self.loss_rooms.item()),
+            "icons": float(self.loss_icons.item()),
+            "heatmap": float(self.loss_heatmap.item()),
+            "total_var": float(self.loss_var.item()),
+            "rooms_var": float(self.loss_rooms_var.item()),
+            "icons_var": float(self.loss_icons_var.item()),
             "heatmap_var": float(self.loss_heatmap_var.item()),
         }
 
@@ -283,8 +281,8 @@ class UncertaintyCustomLoss(nn.Module):
         """Learned uncertainty variances as plain floats."""
         variance = torch.exp(self.log_vars.data)
         return {
-            "room_var":  float(variance[0].item()),
-            "icon_var":  float(variance[1].item()),
+            "room_var": float(variance[0].item()),
+            "icon_var": float(variance[1].item()),
         }
 
     def get_loss(self):
@@ -322,7 +320,6 @@ class UncertaintyCustomLoss(nn.Module):
 
 
 def build_simple_criterion(args, segmentation_map, n_output_channels, device, logger):
-    """Construct the training criterion from CLI-style args (criterion, weights_method, etc.)."""
     weight = _class_weights_tensor(args, segmentation_map, logger)
     name = args.criterion
     if name == "cross-entropy":
@@ -350,12 +347,17 @@ def build_simple_criterion(args, segmentation_map, n_output_channels, device, lo
 
 
 def build_full_criterion(args, input_slice, device, logger):
-    """Build UncertaintyCustomLoss with optional per-class weights for room and icon heads."""
     room_weight = _class_weights_tensor(
-        args, "room-mini", logger, weights_method=getattr(args, "room_weights_method", None)
+        args,
+        "room-mini",
+        logger,
+        weights_method=getattr(args, "room_weights_method", None),
     )
     icon_weight = _class_weights_tensor(
-        args, "icon-mini", logger, weights_method=getattr(args, "icon_weights_method", None)
+        args,
+        "icon-mini",
+        logger,
+        weights_method=getattr(args, "icon_weights_method", None),
     )
     return UncertaintyCustomLoss(
         input_slice=input_slice,

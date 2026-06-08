@@ -1,20 +1,21 @@
 import math
+from xml.dom import minidom
+
+import cv2
 import numpy as np
+from skimage.draw import polygon
+
 from floortrans.loaders.svg_utils import (
     PolygonWall,
-    get_polygon,
     calc_distance,
-    get_room_number,
+    get_direction,
+    get_gaussian2D,
     get_icon,
     get_icon_number,
     get_points,
-    get_direction,
-    get_gaussian2D,
+    get_polygon,
+    get_room_number,
 )
-from xml.dom import minidom
-from skimage.draw import polygon
-import cv2
-
 
 all_rooms = {
     "Background": 0,  # Not in data. The default outside label

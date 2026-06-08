@@ -1,20 +1,20 @@
-import sys
-import os
-import logging
 import json
-import torch
-import torch.nn.functional as F
-import numpy as np
-import yaml  # type: ignore[reportMissingModuleSource]
+import logging
+import os
 from datetime import datetime
 from types import SimpleNamespace
-from tqdm import tqdm
-from floortrans.metrics import runningScore
-from model import cubi_casa5k_simple_model
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import yaml  # type: ignore[reportMissingModuleSource]
 from tensorboardX import SummaryWriter
+from tqdm import tqdm
 
 from criterion import CrossEntropyLearnedWeightsLoss, build_simple_criterion
 from dataloader import build_cubicasa5k_simple_dataloaders, n_segmentation_classes
+from floortrans.metrics import runningScore
+from model import cubi_casa5k_simple_model
 from optimizer import build_optimizer_and_scheduler
 from training_tensorboard import SimpleTrainingTensorBoard
 
@@ -155,7 +155,7 @@ class SegmentationMapTrainer:
                 )
                 # outputs are logits: (N, n_output_channels, H, W)
                 outputs = self.model(images)
-                # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
+                # target is a long tensor (N, H, W) - one class index per pixel (channel 21 or 22)
                 target = self.prepare_segmentation_target(labels, outputs.shape[2:])
                 loss = self.criterion(outputs, target)
                 epoch_train_losses.append(loss.item())

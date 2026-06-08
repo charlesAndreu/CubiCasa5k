@@ -1,10 +1,12 @@
-import lmdb
 import pickle
-import torch
-from torch.utils.data import Dataset
+
 import cv2
+import lmdb
 import numpy as np
+import torch
 from numpy import genfromtxt
+from torch.utils.data import Dataset
+
 from floortrans.loaders.house import House
 
 

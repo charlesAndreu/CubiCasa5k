@@ -1,7 +1,7 @@
 import json
+import logging
 import os
 import sys
-import logging
 from types import SimpleNamespace
 
 import cv2
@@ -126,7 +126,7 @@ def save_eval_sample_images(
     include_wall=False,
 ):
     """
-    PNG exports — *_input.png, *_segmentation.png;
+    PNG exports - *_input.png, *_segmentation.png;
     *_wall.png only when include_wall (room segmentation).
     """
     stem = f"sample_{idx:05d}"

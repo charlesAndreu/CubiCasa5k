@@ -1,11 +1,13 @@
-import lmdb
-import os
-import pickle
 import argparse
 import logging
-import numpy as np
+import os
+import pickle
 from datetime import datetime
+
+import lmdb
+import numpy as np
 from tqdm import tqdm
+
 from floortrans.loaders.svg_loader import FloorplanSVG
 
 

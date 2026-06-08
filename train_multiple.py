@@ -1,43 +1,42 @@
-import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.pyplot as plt
 
 matplotlib.use("pdf")
-import sys
-import os
-import logging
-import json
 import argparse
+import json
+import logging
 import math
+import os
+from datetime import datetime
+
 import lmdb
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from datetime import datetime
-from floortrans.loaders.augmentations import (
-    RandomCropToSizeTorch,
-    ResizePaddedTorch,
-    Compose,
-    DictToTensor,
-    ColorJitterTorch,
-    RandomRotations,
-)
-from torchvision.transforms import RandomChoice
+from tensorboardX import SummaryWriter
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils import data
+from torchvision.transforms import RandomChoice
 from tqdm import tqdm
 
 from floortrans.loaders import FloorplanSVG
+from floortrans.loaders.augmentations import (
+    ColorJitterTorch,
+    Compose,
+    DictToTensor,
+    RandomCropToSizeTorch,
+    RandomRotations,
+    ResizePaddedTorch,
+)
 from floortrans.loaders.room_icon_loaders import (
-    RoomLoader,
     IconLoader,
+    RoomLoader,
     build_simple_train_augmentations,
     build_simple_val_augmentations,
 )
-from floortrans.models import hg_furukawa_original
 from floortrans.metrics import runningScore
-
-from tensorboardX import SummaryWriter
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from floortrans.models import hg_furukawa_original
 
 
 class SegmentationMapTrainer:
@@ -50,7 +49,9 @@ class SegmentationMapTrainer:
         self.logger = logger
         self.n_output_channels = 12 if self.segmentation_map == "room" else 11
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.simple_loader = getattr(self.args, "dataset_loader", "floorplan") == "simple"
+        self.simple_loader = (
+            getattr(self.args, "dataset_loader", "floorplan") == "simple"
+        )
 
     def prepare_segmentation_target(self, labels, output_hw):
         """
@@ -94,9 +95,7 @@ class SegmentationMapTrainer:
             train_aug = build_simple_train_augmentations(self.args)
             val_aug = build_simple_val_augmentations(self.args)
             LoaderCls = RoomLoader if self.segmentation_map == "room" else IconLoader
-            train_set = LoaderCls(
-                self.args.data_path, "train.txt", lmdb_env, train_aug
-            )
+            train_set = LoaderCls(self.args.data_path, "train.txt", lmdb_env, train_aug)
             val_set = LoaderCls(self.args.data_path, "val.txt", lmdb_env, val_aug)
         else:
             if self.args.scale:
@@ -467,7 +466,7 @@ class SegmentationMapTrainer:
                 )
                 # outputs are logits: (N, n_output_channels, H, W)
                 outputs = self.model(images)
-                # target is a long tensor (N, H, W) — one class index per pixel (channel 21 or 22)
+                # target is a long tensor (N, H, W) - one class index per pixel (channel 21 or 22)
                 target = self.prepare_segmentation_target(labels, outputs.shape[2:])
                 loss = self.criterion(outputs, target)
                 epoch_train_losses.append(loss.item())

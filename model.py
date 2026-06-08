@@ -1,11 +1,11 @@
+import segmentation_models_pytorch as smp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import segmentation_models_pytorch as smp
-from floortrans.models import hg_furukawa_original
+from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
 from dataloader import n_segmentation_classes
-from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+from floortrans.models import hg_furukawa_original
 
 
 class CubiCasa5KUnet(smp.Unet):
@@ -53,9 +53,7 @@ class CubiCasa5KFurukawa(hg_furukawa_original):
                 f"Using furukawa model with {self.n_out} channels for {segmentation_map} segmentation map"
                 f" (n_heatmap_channels={n_heatmap_channels})"
             )
-        super().__init__(
-            n_heatmap_channels=n_heatmap_channels, n_output_channels=51
-        )
+        super().__init__(n_heatmap_channels=n_heatmap_channels, n_output_channels=51)
 
         resume = bool(args.resume_from)
         if not resume:

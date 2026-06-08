@@ -1,22 +1,22 @@
-import sys
-import os
-import logging
 import json
-import torch
-import torch.nn.functional as F
-from torch import amp
-import numpy as np
-import yaml  # type: ignore[reportMissingModuleSource]
+import logging
+import os
 from contextlib import nullcontext
 from datetime import datetime
 from types import SimpleNamespace
-from tqdm import tqdm
-from floortrans.metrics import runningScore
-from model import cubi_casa5k_full_model
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import yaml  # type: ignore[reportMissingModuleSource]
 from tensorboardX import SummaryWriter
+from torch import amp
+from tqdm import tqdm
 
 from criterion import build_full_criterion
 from dataloader import build_cubicasa5k_full_dataloaders
+from floortrans.metrics import runningScore
+from model import cubi_casa5k_full_model
 from optimizer import build_optimizer_and_scheduler
 from training_tensorboard import FullTrainingTensorBoard
 
@@ -183,7 +183,7 @@ class Cubicasa5kFullTrainer:
         best_val_loss = np.inf  # best validation total_var (training-aligned objective)
         start_epoch = 0
         # runningScore tracks mIoU/pixel-acc for classification heads
-        # heatmaps are regression (MSE) — already tracked via criterion loss
+        # heatmaps are regression (MSE) - already tracked via criterion loss
         running_metrics_room_val = runningScore(
             self.input_slice[1]
         )  # 4 room-mini classes

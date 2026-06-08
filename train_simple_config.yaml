@@ -6,7 +6,7 @@ segmentation_map: room
 # - unet_resnet34 / unet_resnet50 / unet_resnet152
 # - segformer: Hugging Face SegFormer
 model: segformer
-# HF checkpoint id when model is segformer (ADE fine-tuned heads are replaced for num_labels)
+# HF checkpoint id when model is segformer
 segformer_model_name: nvidia/segformer-b0-finetuned-ade-512-512
 
 # Optimizer strategy (choices):
@@ -26,8 +26,6 @@ dice_weight: 1.0 # used when criterion = cross-entropy-and-dice
 tversky_weight: 1.0 # used when criterion = cross-entropy-and-tversky
 tversky_alpha: 0.6
 tversky_beta: 0.4
-
-# TODO: dice with 0.5 weight and tversky with 1 weight
 
 # Data and training length
 data_path: data/cubicasa5k/
