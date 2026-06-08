@@ -12,8 +12,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 ROOT = Path(__file__).resolve().parent
-TRAINING_CSV = ROOT / "training.csv"
-RUNS_DIR = ROOT / "runs_cubi"
+TRAINING_CSV = ROOT / "training_1.csv"
+RUNS_DIR = ROOT / "runs_cubi_1"
 IMAGES_DIR = ROOT / "plots"
 
 

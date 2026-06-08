@@ -172,9 +172,7 @@ class Cubicasa5kFullTrainer:
                 self.grad_scaler is not None,
             )
         else:
-            self.logger.info(
-                "AMP disabled (CPU or CUDA unavailable; training in FP32)"
-            )
+            self.logger.info("AMP disabled (CPU or CUDA unavailable; training in FP32)")
 
         # ------------------------------------------------------------
         # Training
@@ -370,7 +368,7 @@ class Cubicasa5kFullTrainer:
         log_vars = self.criterion.log_vars.detach().cpu().tolist()
         log_vars_mse = self.criterion.log_vars_mse.detach().cpu().tolist()
         self.logger.info(
-            "Final log_vars [room, icon]: %s  (exp → room_var=%.6f, icon_var=%.6f)",
+            "Final log_vars [room, icon]: %s  (exp -> room_var=%.6f, icon_var=%.6f)",
             log_vars,
             unc["room_var"],
             unc["icon_var"],

@@ -60,7 +60,7 @@ UPLOAD_MAX_SIDE = int(os.environ.get("CUBI_VIZ_UPLOAD_MAX_SIDE", "2048"))
 
 
 def _image_bytes_to_model_tensor(data: bytes) -> torch.Tensor:
-    """Decode image file bytes → (3, H, W) float in [-1, 1] (same as FullLoader)."""
+    """Decode image file bytes -> (3, H, W) float in [-1, 1] (same as FullLoader)."""
     pil = Image.open(io.BytesIO(data))
     pil = pil.convert("RGB")
     arr = np.array(pil, dtype=np.uint8)
@@ -97,7 +97,7 @@ def _png_bytes(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> bytes:
 
 
 def _entropy_rgb_from_probs(probs_chw: np.ndarray, n_classes: int) -> np.ndarray:
-    """Softmax probs (C, H, W) → inferno RGB via eval_full + eval_simple helpers."""
+    """Softmax probs (C, H, W) -> inferno RGB via eval_full + eval_simple helpers."""
     entropy_hw = _entropy_from_probs(probs_chw, n_classes).numpy()
     return entropy_hw_to_inferno_rgb(entropy_hw)
 
@@ -161,7 +161,9 @@ class CachedRun:
 
 
 class VizEngine:
-    def __init__(self, data_path: str | None = None, run_roots: tuple[str, ...] | None = None):
+    def __init__(
+        self, data_path: str | None = None, run_roots: tuple[str, ...] | None = None
+    ):
         self.data_path = (data_path or DEFAULT_DATA_PATH).rstrip(os.sep) + os.sep
         self.run_roots = run_roots or DEFAULT_RUN_ROOTS
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -267,7 +269,9 @@ class VizEngine:
             raise KeyError(f"Unknown upload_id: {upload_id}")
         return self._uploads[upload_id]
 
-    def get_input_png(self, plan_id: int | None = None, upload_id: str | None = None) -> bytes:
+    def get_input_png(
+        self, plan_id: int | None = None, upload_id: str | None = None
+    ) -> bytes:
         if upload_id:
             bgr = _tensor_to_bgr_uint8(self.get_upload(upload_id).image_chw)
         else:

@@ -59,7 +59,7 @@ def _save_entropy_heatmap_png(path, entropy_hw, title):
 
 
 def entropy_hw_to_inferno_rgb(entropy_hw: np.ndarray) -> np.ndarray:
-    """Normalized entropy (H, W) in [0, 1] → RGB uint8 (inferno, same as _save_entropy_heatmap_png)."""
+    """Normalized entropy (H, W) in [0, 1] -> RGB uint8 (inferno, same as _save_entropy_heatmap_png)."""
     u8 = (np.clip(np.asarray(entropy_hw, dtype=np.float64), 0.0, 1.0) * 255.0).astype(
         np.uint8
     )
