@@ -410,31 +410,36 @@ class VizEngine:
         _, _, combined = run.postproc[thr]
         return _png_bytes(_combined_rgb(combined))
 
-    def postproc_wall_png(
+    def wall_network_result(
         self,
         model_id: str,
         threshold: float,
         axis_bias: float = 0.35,
         snap_align: float = 0.0,
         wall_evidence: float = 0.9,
+        min_wall_fraction: float = 0.5,
         plan_id: int | None = None,
         upload_id: str | None = None,
-    ) -> bytes:
+    ) -> dict:
         """New non-Manhattan wall-graph post-process (post_process_wall.py), applied
         directly to the existing train_full model's 21-channel heatmap prediction --
-        no separately trained train_wall.py checkpoint required.
+        no separately trained train_wall.py checkpoint required. Returns the raw
+        result dict (points/opening_points/wall_segments/openings); see
+        postproc_wall_png for the rendered-PNG version and render_wall_network_bgr.
         axis_bias: strength of the horizontal/vertical preference (angle_bonus_weight).
         snap_align: 0 disables; otherwise forces points connected by an accepted
         edge onto a shared exact x/y, gated by an absolute pixel deviation (not a
         fixed angle -- see snap_axis_aligned_points for why) of up to this many px.
         wall_evidence: strength of real pixel evidence from this same model's own
-        room/wall segmentation (run.rooms_seg) -- candidates whose line isn't mostly
-        wall-classified pixels are rejected outright, not just discounted; see
-        generate_candidates' room_seg/wall_evidence_weight/min_wall_fraction."""
+        room/wall segmentation (run.rooms_seg) -- candidates under min_wall_fraction
+        are hard-rejected outright; this controls a softer preference for
+        more-covered candidates on top of that.
+        min_wall_fraction: the hard-reject threshold for wall_evidence itself."""
         run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         key = (
             round(float(threshold), 3), round(float(axis_bias), 3),
             round(float(snap_align), 2), round(float(wall_evidence), 3),
+            round(float(min_wall_fraction), 3),
         )
         if key not in run.wall_postproc:
             wall_heatmaps = remap_prediction_to_wall_heatmaps(run.heatmaps)
@@ -442,7 +447,61 @@ class VizEngine:
                 wall_heatmaps, point_threshold=key[0], opening_threshold=key[0],
                 angle_bonus_weight=key[1], snap_axis_tolerance_px=key[2],
                 room_seg=run.rooms_seg, wall_class_id=WALL_CLASS, wall_evidence_weight=key[3],
+                min_wall_fraction=key[4],
             )
-        result = run.wall_postproc[key]
+        return run.wall_postproc[key]
+
+    def postproc_wall_png(
+        self,
+        model_id: str,
+        threshold: float,
+        axis_bias: float = 0.35,
+        snap_align: float = 0.0,
+        wall_evidence: float = 0.9,
+        min_wall_fraction: float = 0.5,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
+        result = self.wall_network_result(
+            model_id, threshold, axis_bias=axis_bias, snap_align=snap_align,
+            wall_evidence=wall_evidence, min_wall_fraction=min_wall_fraction,
+            plan_id=plan_id, upload_id=upload_id,
+        )
         overlay_bgr = render_wall_network_bgr(run.input_bgr, result)
+        return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB))
+
+    def skeleton_overlay_png(
+        self,
+        model_id: str,
+        threshold: float,
+        base: str = "map",
+        seg_alpha: float = 0.5,
+        axis_bias: float = 0.35,
+        snap_align: float = 0.0,
+        wall_evidence: float = 0.9,
+        min_wall_fraction: float = 0.5,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        """One image: the computed wall skeleton drawn on top of `base`, so the
+        skeleton can be checked directly against the exact segmentation it was
+        scored against, not just the raw plan. base: "map" (input plan only),
+        "segmentation" (room_seg only), or "both" (segmentation alpha-blended over
+        the map at seg_alpha, then skeleton drawn on top of that)."""
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
+        result = self.wall_network_result(
+            model_id, threshold, axis_bias=axis_bias, snap_align=snap_align,
+            wall_evidence=wall_evidence, min_wall_fraction=min_wall_fraction,
+            plan_id=plan_id, upload_id=upload_id,
+        )
+        if base == "segmentation":
+            base_bgr = cv2.cvtColor(_seg_rgb(run.rooms_seg, N_ROOM_CLASSES), cv2.COLOR_RGB2BGR)
+        elif base == "both":
+            seg_bgr = cv2.cvtColor(_seg_rgb(run.rooms_seg, N_ROOM_CLASSES), cv2.COLOR_RGB2BGR)
+            a = max(0.0, min(1.0, float(seg_alpha)))
+            base_bgr = cv2.addWeighted(seg_bgr, a, run.input_bgr, 1.0 - a, 0.0)
+        else:
+            base_bgr = run.input_bgr
+        overlay_bgr = render_wall_network_bgr(base_bgr, result)
         return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB))

@@ -16,7 +16,6 @@ import math
 
 import numpy as np
 import torch
-from scipy.spatial import cKDTree
 from shapely.geometry import LineString
 
 from floortrans.post_prosessing import extract_local_max, bresenham_line
@@ -207,11 +206,14 @@ def _passes_through_other_point(points, i, j, exclude, tolerance_px):
 
 def _wall_pixel_fraction(room_seg, wall_class_id, x1, y1, x2, y2):
     """Fraction of the candidate line's rasterized pixels that the model's own room
-    segmentation actually calls wall -- real pixel evidence, not geometry. A genuine
-    wall's line should be wall-covered nearly end to end; a spurious diagonal cutting
-    across a room's interior mostly crosses non-wall pixels instead. Reuses the same
-    bresenham_line the legacy post_prosessing.get_wall_lines uses for this exact
-    purpose (post_prosessing.py:243-246), which returns (row, col) tuples."""
+    segmentation calls wall -- real pixel evidence, used as a *soft* scoring signal
+    only (see generate_candidates' wall_evidence_weight). Deliberately not a hard
+    veto: neither an average-coverage cutoff nor a longest-contiguous-run cutoff
+    survived verification against real predictions (both either rejected genuine
+    walls or let spurious diagonals back in) -- the segmentation signal is useful for
+    ranking candidates against each other, not for outright accepting/rejecting one
+    in isolation. Reuses the same bresenham_line the legacy post_prosessing.get_wall_lines
+    uses for this exact purpose (post_prosessing.py:243-246), (row, col) tuples."""
     line_pixels = bresenham_line(int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2)))
     if not line_pixels:
         return 1.0
@@ -227,31 +229,26 @@ def _wall_pixel_fraction(room_seg, wall_class_id, x1, y1, x2, y2):
 
 
 def generate_candidates(
-    points, k_neighbors=12, min_length_px=6.0, max_length_px=None, pass_through_tolerance_px=4.0,
+    points, min_length_px=6.0, max_length_px=None, pass_through_tolerance_px=4.0,
     room_seg=None, wall_class_id=2, wall_evidence_weight=0.9, min_wall_fraction=0.5,
 ):
-    """Bounded candidate set: each point only pairs with its k nearest neighbors
-    (plus symmetric pairs), not the full N^2 pairing."""
+    """Every point pair is considered -- at real floorplan point counts (tens,
+    rarely more than ~100) this is trivial (O(n^2)), and a k-nearest-neighbor
+    prefilter was actively wrong, not just a performance shortcut: it can
+    permanently exclude a real wall just for being geometrically "far" (e.g.
+    spanning a wide room), whenever enough *other*, unrelated points happen to be
+    closer in raw distance -- no matter how large k is set, there's always a room
+    shape where the correct partner isn't in the top-k. The real filtering happens
+    later and doesn't need a distance prefilter to work: _passes_through_other_point
+    rejects bypasses, wall-pixel evidence rejects unsupported lines, and arity
+    budget + no-crossing during selection reject the rest."""
     n = len(points)
     if n < 2:
         return []
-    coords = np.array([[p["x"], p["y"]] for p in points])
-    tree = cKDTree(coords)
-    k = min(k_neighbors + 1, n)  # +1 because a point is its own nearest neighbor
-    _, neighbor_idx = tree.query(coords, k=k)
 
-    seen = set()
     candidates = []
     for i in range(n):
-        for j in neighbor_idx[i]:
-            j = int(j)
-            if j == i:
-                continue
-            key = (min(i, j), max(i, j))
-            if key in seen:
-                continue
-            seen.add(key)
-
+        for j in range(i + 1, n):
             dx = points[j]["x"] - points[i]["x"]
             dy = points[j]["y"] - points[i]["y"]
             length = math.hypot(dx, dy)
@@ -274,15 +271,12 @@ def generate_candidates(
             noise_band = 3 * min_length_px
             length_score = length / noise_band if length < noise_band else 1.0
 
-            # Real pixel evidence, when available: heavily favor a candidate whose
-            # line actually sits on wall-classified pixels over one that doesn't,
-            # instead of relying purely on point-graph geometry to guess that. Below
-            # min_wall_fraction this is a hard reject, not just a discount -- a pure
-            # scaling factor can't actually veto a candidate, since a heavily
-            # discounted score can still "win" a slot by default when nothing else
-            # is available to fill it; less than half a line's own length being
-            # wall-classified is strong enough evidence that no real wall is there to
-            # justify never even offering it as a candidate.
+            # Real pixel evidence, when available: reject a candidate whose line
+            # mostly doesn't sit on wall-classified pixels -- a soft scaling factor
+            # alone can't act as a real veto (a heavily discounted score can still
+            # "win" a slot by default when nothing better is available to fill it),
+            # and a spurious diagonal cutting across open room space should never
+            # win regardless of what else is or isn't competing for that slot.
             wall_evidence_score = 1.0
             if room_seg is not None:
                 fraction = _wall_pixel_fraction(
@@ -488,7 +482,6 @@ def build_wall_network(
     heatmaps,
     point_threshold=0.5,
     opening_threshold=0.5,
-    k_neighbors=8,
     min_length_px=6.0,
     max_length_px=None,
     perp_tolerance_px=12.0,
@@ -510,16 +503,17 @@ def build_wall_network(
     pixels onto a shared y/x -- see snap_axis_aligned_points.
     room_seg: optional (H, W) room/wall segmentation array (e.g. from the same
     train_full model's own room head -- viz_web already has this for free). When
-    given, candidates are scored by real pixel evidence (what fraction of the
-    candidate line actually falls on wall_class_id) instead of purely geometric
-    heuristics -- see generate_candidates. None (default) skips this entirely, which
-    is required for a points-only train_wall.py model that has no room segmentation
-    at all."""
+    given, a candidate with less than min_wall_fraction of its line on wall_class_id
+    pixels is hard-rejected outright (a spurious diagonal across open room space
+    should never win purely for lack of a better competitor); wall_evidence_weight
+    controls a softer preference for more-covered candidates on top of that -- see
+    generate_candidates. None (default) skips this entirely, which is required for a
+    points-only train_wall.py model that has no room segmentation at all."""
     points = extract_wall_points(heatmaps, threshold=point_threshold, min_separation_px=min_separation_px)
     opening_points = extract_opening_points(heatmaps, threshold=opening_threshold, min_separation_px=min_separation_px)
 
     candidates = generate_candidates(
-        points, k_neighbors=k_neighbors, min_length_px=min_length_px, max_length_px=max_length_px,
+        points, min_length_px=min_length_px, max_length_px=max_length_px,
         room_seg=room_seg, wall_class_id=wall_class_id, wall_evidence_weight=wall_evidence_weight,
         min_wall_fraction=min_wall_fraction,
     )
@@ -647,7 +641,6 @@ def main():
     parser.add_argument("--n_wall_channels", type=int, default=5)
     parser.add_argument("--point_threshold", type=float, default=0.5)
     parser.add_argument("--opening_threshold", type=float, default=0.5)
-    parser.add_argument("--k_neighbors", type=int, default=8)
     parser.add_argument("--out", default="wall_network.png")
     args = parser.parse_args()
 
@@ -679,7 +672,6 @@ def main():
         heatmaps,
         point_threshold=args.point_threshold,
         opening_threshold=args.opening_threshold,
-        k_neighbors=args.k_neighbors,
     )
     logger.info(
         "%d points, %d wall segments, %d openings",

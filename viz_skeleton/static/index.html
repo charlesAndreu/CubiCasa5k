@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wall skeleton — post-process viewer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Wall skeleton viewer</h1>
+    <p class="subtitle">post_process_wall.py only — skeleton on map / segmentation / both, downloadable</p>
+  </header>
+
+  <section class="controls">
+    <fieldset class="source-fieldset">
+      <legend>Input</legend>
+      <label class="inline">
+        <input type="radio" name="source" id="sourcePreset" value="preset" checked />
+        Test set
+      </label>
+      <label class="inline">
+        <input type="radio" name="source" id="sourceUpload" value="upload" />
+        Upload
+      </label>
+    </fieldset>
+
+    <label id="planLabel">
+      Plan
+      <select id="planSelect"></select>
+    </label>
+
+    <label id="uploadLabel" class="hidden">
+      Image
+      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/jpg,image/webp" />
+    </label>
+
+    <label>
+      Model
+      <select id="modelSelect">
+        <option value="">— checkpoint —</option>
+      </select>
+    </label>
+
+    <button id="runBtn" type="button" disabled>Run</button>
+    <span id="status" class="status"></span>
+  </section>
+
+  <section class="controls">
+    <label>
+      Base layer
+      <select id="baseLayer">
+        <option value="map">Map</option>
+        <option value="segmentation">Segmentation</option>
+        <option value="both">Both (segmentation over map)</option>
+      </select>
+    </label>
+    <label id="segAlphaLabel" class="hidden">
+      Segmentation opacity
+      <span class="thr-row">
+        <input type="range" id="segAlpha" min="0" max="1" step="0.05" value="0.5" disabled />
+        <output id="segAlphaVal">0.50</output>
+      </span>
+    </label>
+  </section>
+
+  <section class="controls criteria">
+    <label>
+      Point threshold
+      <span class="thr-row">
+        <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.25" disabled />
+        <output id="thresholdVal">0.25</output>
+      </span>
+    </label>
+    <label>
+      Axis bias (H/V strength)
+      <span class="thr-row">
+        <input type="range" id="axisBias" min="0" max="5" step="0.1" value="0.35" disabled />
+        <output id="axisBiasVal">0.35</output>
+      </span>
+    </label>
+    <label>
+      Force alignment (snap, px offset allowed)
+      <span class="thr-row">
+        <input type="range" id="snapAlign" min="0" max="60" step="1" value="0" disabled />
+        <output id="snapAlignVal">0 (off)</output>
+      </span>
+    </label>
+    <label>
+      Wall pixel evidence (from segmentation)
+      <span class="thr-row">
+        <input type="range" id="wallEvidence" min="0" max="1" step="0.05" value="0.9" disabled />
+        <output id="wallEvidenceVal">0.90</output>
+      </span>
+    </label>
+    <label>
+      Min wall coverage to accept a line
+      <span class="thr-row">
+        <input type="range" id="minWallFraction" min="0" max="1" step="0.05" value="0.5" disabled />
+        <output id="minWallFractionVal">0.50</output>
+      </span>
+    </label>
+  </section>
+
+  <main class="grid1">
+    <figure class="panel">
+      <figcaption>
+        <span id="overlayCaption">Skeleton on map</span>
+        <span class="fig-actions">
+          <button id="dlOverlayPng" type="button" disabled>Download PNG</button>
+          <button id="dlSkeletonJson" type="button" disabled>Download geometry (JSON)</button>
+        </span>
+      </figcaption>
+      <div class="img-wrap"><img id="imgOverlay" alt="Computed wall skeleton" /></div>
+    </figure>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
