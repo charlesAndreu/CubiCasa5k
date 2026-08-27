@@ -28,6 +28,7 @@ from eval_full import (  # noqa: E402
     N_HEATMAPS,
     N_ICON_CLASSES,
     N_ROOM_CLASSES,
+    WALL_CLASS,
     _entropy_from_probs,
     build_combined_map,
     combined_map_colors,
@@ -44,6 +45,11 @@ from floortrans import post_prosessing  # noqa: E402
 from floortrans.loaders.augmentations import DictToTensor  # noqa: E402
 from floortrans.loaders.room_icon_loaders import FullLoader  # noqa: E402
 from model import cubi_casa5k_full_model  # noqa: E402
+from post_process_wall import (  # noqa: E402
+    build_wall_network,
+    remap_prediction_to_wall_heatmaps,
+    render_wall_network_bgr,
+)
 
 CHANNEL_GROUPS = {
     "wall": (0, 13),
@@ -158,6 +164,7 @@ class CachedRun:
     postproc: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = field(
         default_factory=dict
     )
+    wall_postproc: dict[tuple[float, float, float, float], dict] = field(default_factory=dict)
 
 
 class VizEngine:
@@ -402,3 +409,40 @@ class VizEngine:
             run.postproc[thr] = (pol_rooms, pol_icons, combined)
         _, _, combined = run.postproc[thr]
         return _png_bytes(_combined_rgb(combined))
+
+    def postproc_wall_png(
+        self,
+        model_id: str,
+        threshold: float,
+        axis_bias: float = 0.35,
+        snap_align: float = 0.0,
+        wall_evidence: float = 0.9,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        """New non-Manhattan wall-graph post-process (post_process_wall.py), applied
+        directly to the existing train_full model's 21-channel heatmap prediction --
+        no separately trained train_wall.py checkpoint required.
+        axis_bias: strength of the horizontal/vertical preference (angle_bonus_weight).
+        snap_align: 0 disables; otherwise forces points connected by an accepted
+        edge onto a shared exact x/y, gated by an absolute pixel deviation (not a
+        fixed angle -- see snap_axis_aligned_points for why) of up to this many px.
+        wall_evidence: strength of real pixel evidence from this same model's own
+        room/wall segmentation (run.rooms_seg) -- candidates whose line isn't mostly
+        wall-classified pixels are rejected outright, not just discounted; see
+        generate_candidates' room_seg/wall_evidence_weight/min_wall_fraction."""
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
+        key = (
+            round(float(threshold), 3), round(float(axis_bias), 3),
+            round(float(snap_align), 2), round(float(wall_evidence), 3),
+        )
+        if key not in run.wall_postproc:
+            wall_heatmaps = remap_prediction_to_wall_heatmaps(run.heatmaps)
+            run.wall_postproc[key] = build_wall_network(
+                wall_heatmaps, point_threshold=key[0], opening_threshold=key[0],
+                angle_bonus_weight=key[1], snap_axis_tolerance_px=key[2],
+                room_seg=run.rooms_seg, wall_class_id=WALL_CLASS, wall_evidence_weight=key[3],
+            )
+        result = run.wall_postproc[key]
+        overlay_bgr = render_wall_network_bgr(run.input_bgr, result)
+        return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB))

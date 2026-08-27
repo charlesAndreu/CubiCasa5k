@@ -194,6 +194,36 @@ def api_postproc():
     return Response(png, mimetype="image/png")
 
 
+@app.get("/api/postproc_wall.png")
+def api_postproc_wall():
+    """New non-Manhattan wall-graph post-process (points + lines), applied to the
+    existing train_full model's heatmap prediction -- no train_wall.py checkpoint
+    required."""
+    model_id = request.args.get("model_id")
+    if not model_id:
+        return jsonify({"error": "model_id required"}), 400
+    try:
+        threshold = float(request.args.get("threshold", 0.25))
+        axis_bias = float(request.args.get("axis_bias", 0.35))
+        snap_align = float(request.args.get("snap_align", 0.0))
+        wall_evidence = float(request.args.get("wall_evidence", 0.9))
+        plan_id, upload_id = _parse_source(args=request.args)
+        png = get_engine().postproc_wall_png(
+            model_id,
+            threshold,
+            axis_bias=axis_bias,
+            snap_align=snap_align,
+            wall_evidence=wall_evidence,
+            plan_id=plan_id,
+            upload_id=upload_id,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return Response(png, mimetype="image/png")
+
+
 def main():
     parser = argparse.ArgumentParser(description="CubiCasa5k prediction viewer")
     parser.add_argument("--host", default="127.0.0.1")

@@ -13,18 +13,18 @@ icon_weights_method: inverse_double_sqrt_frequency
 
 # Data and training length
 data_path: data/cubicasa5k/
-n_epoch: 200
+n_epoch: 400
 batch_size: 26
 image_size: 256
 
 # Learning-rate controls
-l_rate: 0.0005
+l_rate: 0.001
 l_rate_drop: 200 # used by adam-scheduler
 patience: 20 # used by patience-based optimizers
 
 # Checkpoints
 furukawa_weights: null # optional pretrained Furukawa weights
-resume_from: runs_cubi/2026-05-18-21:51:17/model_last_epoch.pkl # model weights + criterion log_vars if present in .pkl
+resume_from: null # model weights + criterion log_vars if present in .pkl
 
 # Logging
 log_path: runs_cubi/

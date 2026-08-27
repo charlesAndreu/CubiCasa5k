@@ -7,10 +7,26 @@ const uploadLabel = $("uploadLabel");
 const planSelect = $("planSelect");
 const fileInput = $("fileInput");
 const modelSelect = $("modelSelect");
+const postprocMode = $("postprocMode");
+const postprocCaption = $("postprocCaption");
 const runBtn = $("runBtn");
 const statusEl = $("status");
 const threshold = $("threshold");
 const thresholdVal = $("thresholdVal");
+const axisBiasLabel = $("axisBiasLabel");
+const axisBias = $("axisBias");
+const axisBiasVal = $("axisBiasVal");
+const snapAlignLabel = $("snapAlignLabel");
+const snapAlign = $("snapAlign");
+const snapAlignVal = $("snapAlignVal");
+const wallEvidenceLabel = $("wallEvidenceLabel");
+const wallEvidence = $("wallEvidence");
+const wallEvidenceVal = $("wallEvidenceVal");
+
+const POSTPROC_CAPTIONS = {
+  legacy: "Post-proc combined",
+  wall: "Wall graph (points + lines)",
+};
 
 const images = {
   input: $("imgInput"),
@@ -181,9 +197,41 @@ async function init() {
   threshold.addEventListener("input", () => {
     if (modelId() && images.room.src) schedulePostproc();
   });
+  postprocMode.addEventListener("change", () => {
+    postprocCaption.textContent = POSTPROC_CAPTIONS[postprocMode.value];
+    updatePostprocModeUI();
+    if (modelId() && images.room.src) schedulePostproc();
+  });
+  axisBias.addEventListener("input", () => {
+    axisBiasVal.textContent = Number(axisBias.value).toFixed(2);
+  });
+  axisBias.addEventListener("input", () => {
+    if (modelId() && images.room.src) schedulePostproc();
+  });
+  snapAlign.addEventListener("input", () => {
+    const v = Number(snapAlign.value);
+    snapAlignVal.textContent = v === 0 ? "0 (off)" : `${v.toFixed(0)}px`;
+  });
+  snapAlign.addEventListener("input", () => {
+    if (modelId() && images.room.src) schedulePostproc();
+  });
+  wallEvidence.addEventListener("input", () => {
+    wallEvidenceVal.textContent = Number(wallEvidence.value).toFixed(2);
+  });
+  wallEvidence.addEventListener("input", () => {
+    if (modelId() && images.room.src) schedulePostproc();
+  });
 
+  updatePostprocModeUI();
   loadInput();
   updateButtons();
+}
+
+function updatePostprocModeUI() {
+  const isWall = postprocMode.value === "wall";
+  axisBiasLabel.classList.toggle("hidden", !isWall);
+  snapAlignLabel.classList.toggle("hidden", !isWall);
+  wallEvidenceLabel.classList.toggle("hidden", !isWall);
 }
 
 function updateButtons() {
@@ -191,6 +239,9 @@ function updateButtons() {
   const hasInput = isUploadMode() ? Boolean(uploadId) : true;
   runBtn.disabled = !hasModel || !hasInput;
   threshold.disabled = !hasModel || !hasInput;
+  axisBias.disabled = !hasModel || !hasInput;
+  snapAlign.disabled = !hasModel || !hasInput;
+  wallEvidence.disabled = !hasModel || !hasInput;
 }
 
 async function runInference() {
@@ -235,9 +286,21 @@ async function loadPostproc() {
   thresholdVal.textContent = thr;
   setStatus(`Post-processing @ ${thr}…`);
   try {
-    images.postproc.src = cacheBust(
-      `/api/postproc.png?${qs({ threshold: thr })}`
-    );
+    const isWall = postprocMode.value === "wall";
+    const endpoint = isWall ? "postproc_wall" : "postproc";
+    const extra = { threshold: thr };
+    if (isWall) {
+      const bias = Number(axisBias.value).toFixed(2);
+      axisBiasVal.textContent = bias;
+      extra.axis_bias = bias;
+      const snap = Number(snapAlign.value).toFixed(0);
+      snapAlignVal.textContent = snap === "0" ? "0 (off)" : `${snap}px`;
+      extra.snap_align = snap;
+      const evidence = Number(wallEvidence.value).toFixed(2);
+      wallEvidenceVal.textContent = evidence;
+      extra.wall_evidence = evidence;
+    }
+    images.postproc.src = cacheBust(`/api/${endpoint}.png?${qs(extra)}`);
     const label = isUploadMode()
       ? fileInput.files?.[0]?.name || "upload"
       : planSelect.selectedOptions[0]?.textContent || "";

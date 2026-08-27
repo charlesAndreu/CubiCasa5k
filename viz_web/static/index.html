@@ -42,10 +42,38 @@
       </select>
     </label>
     <label>
+      Post-process
+      <select id="postprocMode">
+        <option value="legacy">Legacy (room/icon polygons, Manhattan)</option>
+        <option value="wall">Wall graph (points + lines, any angle)</option>
+      </select>
+    </label>
+    <label>
       Threshold
       <span class="thr-row">
         <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.25" disabled />
         <output id="thresholdVal">0.25</output>
+      </span>
+    </label>
+    <label id="axisBiasLabel" class="hidden">
+      Axis bias (H/V strength)
+      <span class="thr-row">
+        <input type="range" id="axisBias" min="0" max="5" step="0.1" value="0.35" disabled />
+        <output id="axisBiasVal">0.35</output>
+      </span>
+    </label>
+    <label id="snapAlignLabel" class="hidden">
+      Force alignment (snap, px offset allowed)
+      <span class="thr-row">
+        <input type="range" id="snapAlign" min="0" max="60" step="1" value="0" disabled />
+        <output id="snapAlignVal">0 (off)</output>
+      </span>
+    </label>
+    <label id="wallEvidenceLabel" class="hidden">
+      Wall pixel evidence (from segmentation)
+      <span class="thr-row">
+        <input type="range" id="wallEvidence" min="0" max="1" step="0.05" value="0.9" disabled />
+        <output id="wallEvidenceVal">0.90</output>
       </span>
     </label>
     <button id="runBtn" type="button" disabled>Run</button>
@@ -58,8 +86,8 @@
       <div class="img-wrap"><img id="imgInput" alt="Input floor plan" /></div>
     </figure>
     <figure class="panel row-main highlight">
-      <figcaption>Post-proc combined</figcaption>
-      <div class="img-wrap"><img id="imgPostproc" alt="Post-processed combined" /></div>
+      <figcaption id="postprocCaption">Post-proc combined</figcaption>
+      <div class="img-wrap"><img id="imgPostproc" alt="Post-processed result" /></div>
     </figure>
 
     <figure class="panel row-seg">

@@ -321,6 +321,64 @@ class UncertaintyCustomLoss(nn.Module):
         return pd.DataFrame(data=d)
 
 
+class HeatmapMSELoss(nn.Module):
+    """Plain per-pixel MSE between an already-sigmoided prediction and a gaussian
+    heatmap target (both in [0,1])."""
+
+    def forward(self, pred, target):
+        return mse_loss(input=pred, target=target)
+
+
+class HeatmapFocalLoss(nn.Module):
+    """CornerNet/CenterNet-style penalty-reduced pixelwise focal loss for keypoint
+    heatmaps. Plain MSE gives a weak, imbalanced gradient once the gaussian target is
+    made thin/sharp (the positive region shrinks to a handful of pixels); this loss
+    keeps full gradient at true peaks while down-weighting near-peak "soft negative"
+    pixels via (1-target)**beta, instead of penalizing them as hard negatives.
+    """
+
+    def __init__(self, alpha=2.0, beta=4.0, eps=1e-6):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+
+    def forward(self, pred, target):
+        # Compute in float32 regardless of the caller's autocast dtype: under fp16/bf16
+        # a sigmoid output can round to exactly 0.0/1.0, and the eps-clamp below can
+        # itself round back to 0.0 at reduced precision -- log(0) = -inf, and that -inf
+        # times a mask of 0 (a background pixel that should contribute nothing) is NaN,
+        # not 0. float32 keeps the clamp bound meaningfully non-zero.
+        pred = pred.float().clamp(self.eps, 1.0 - self.eps)
+        target = target.float()
+        pos_mask = target.eq(1.0).float()
+        neg_mask = target.lt(1.0).float()
+        neg_weights = torch.pow(1.0 - target, self.beta)
+
+        pos_loss = torch.log(pred) * torch.pow(1.0 - pred, self.alpha) * pos_mask
+        neg_loss = (
+            torch.log(1.0 - pred) * torch.pow(pred, self.alpha) * neg_weights * neg_mask
+        )
+
+        num_pos = pos_mask.sum()
+        pos_loss = pos_loss.sum()
+        neg_loss = neg_loss.sum()
+
+        if num_pos == 0:
+            return -neg_loss
+        return -(pos_loss + neg_loss) / num_pos
+
+
+def build_wall_criterion(args, device, logger):
+    """Heatmap-only criterion for train_wall.py (no room/icon heads)."""
+    name = getattr(args, "criterion", "mse")
+    if name == "mse":
+        return HeatmapMSELoss().to(device)
+    if name == "focal-heatmap":
+        return HeatmapFocalLoss().to(device)
+    raise ValueError(f"Invalid criterion: {name}")
+
+
 def build_simple_criterion(args, segmentation_map, n_output_channels, device, logger):
     """Construct the training criterion from CLI-style args (criterion, weights_method, etc.)."""
     weight = _class_weights_tensor(args, segmentation_map, logger)

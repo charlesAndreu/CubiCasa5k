@@ -138,6 +138,73 @@ class SimpleTrainingTensorBoard:
             self.writer.close()
 
 
+class WallTrainingTensorBoard(SimpleTrainingTensorBoard):
+    """TensorBoard logging for the wall-point-only trainer (5 heatmap channels: arity + opening)."""
+
+    def log_point_metrics(self, epoch, precision, recall, f1):
+        step = 1 + epoch
+        self._log_scalar("validation/points/precision", precision, step)
+        self._log_scalar("validation/points/recall", recall, step)
+        self._log_scalar("validation/points/f1", f1, step)
+
+    def log_new_best_val_visualizations(
+        self, epoch, valloader, first_best, model, args, n_channels, device
+    ):
+        if self.writer is None or not args.plot_samples:
+            return
+        # Channels 0-3 are junction arity, channel 4 is the opening endpoint (see
+        # floortrans/loaders/wall_loader.py) -- kept as two separate figures rather
+        # than one blended sum, since a bad opening prediction shouldn't be hidden
+        # inside an otherwise-good corner heatmap (or vice versa).
+        n_arity = min(4, n_channels)
+        has_opening = n_channels > n_arity
+
+        model.eval()
+        step = 1 + epoch
+
+        for i, samples_val in enumerate(valloader):
+            if i == 4:
+                break
+            with torch.no_grad():
+                images_val = samples_val["image"].to(
+                    device, non_blocking=(device.type == "cuda")
+                )
+                labels_val = samples_val["label"].to(
+                    device, non_blocking=(device.type == "cuda")
+                )
+                if first_best:
+                    self.writer.add_image("Image " + str(i), images_val[0])
+                    self._log_channel_group_figure(
+                        f"Image {i} heatmaps_sum_gt_wall/corners",
+                        labels_val[0, :n_arity], step, display=False,
+                    )
+                    if has_opening:
+                        self._log_channel_group_figure(
+                            f"Image {i} heatmaps_sum_gt_wall/opening",
+                            labels_val[0, n_arity:n_channels], step, display=False,
+                        )
+
+                outputs = model(images_val)
+                preds = torch.sigmoid(outputs[0, :n_channels])
+                self._log_channel_group_figure(
+                    f"Image {i} heatmaps_sum_pred_wall/corners",
+                    preds[:n_arity], step, display=True,
+                )
+                if has_opening:
+                    self._log_channel_group_figure(
+                        f"Image {i} heatmaps_sum_pred_wall/opening",
+                        preds[n_arity:n_channels], step, display=True,
+                    )
+
+    def _log_channel_group_figure(self, tag, channels_chw, step, display):
+        arr = channels_chw.sum(dim=0).detach().float().cpu().numpy()
+        if display:
+            arr = _pred_heatmap_sum_display(arr)
+        fig = _figure_heatmap_sum(arr)
+        self.writer.add_figure(tag, fig, global_step=step)
+        plt.close(fig)
+
+
 class FullTrainingTensorBoard(SimpleTrainingTensorBoard):
 
     def __init__(self, writer, input_slice=(21, 4, 4)):

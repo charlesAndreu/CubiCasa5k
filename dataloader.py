@@ -13,6 +13,11 @@ from floortrans.loaders.room_icon_loaders import (
     build_simple_train_augmentations,
     build_simple_val_augmentations,
 )
+from floortrans.loaders.wall_loader import (
+    WallLoader,
+    build_wall_train_augmentations,
+    build_wall_val_augmentations,
+)
 from floortrans.loaders.augmentations import Compose, DictToTensor
 
 
@@ -121,6 +126,62 @@ def build_cubicasa5k_full_dataloaders(args, device, logger):
 
     logger.info(
         "Full DataLoader num_workers=%s prefetch_factor=%s",
+        num_workers,
+        max(2, int(args.prefetch_factor)) if num_workers > 0 else "n/a",
+    )
+
+    dl_common = dict(
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=num_workers > 0,
+    )
+    if num_workers > 0:
+        dl_common["prefetch_factor"] = max(2, int(args.prefetch_factor))
+
+    trainloader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        **dl_common,
+    )
+    valloader = DataLoader(
+        val_set,
+        batch_size=1,
+        **dl_common,
+    )
+
+    return trainloader, valloader
+
+
+def build_cubicasa5k_wall_dataloaders(args, device, logger):
+    """Open LMDB, build train/val datasets and DataLoaders for wall-point-only training."""
+    logger.info("Loading data...")
+    root = args.data_path.rstrip(os.sep)
+    lmdb_path = os.path.join(root, "cubi_lmdb")
+    lmdb_env = lmdb.open(
+        lmdb_path,
+        readonly=True,
+        max_readers=16,
+        lock=False,
+        readahead=True,
+        meminit=False,
+    )
+    train_aug = build_wall_train_augmentations(args)
+    val_aug = build_wall_val_augmentations(args)
+    logger.info("Loading wall-point data (5 heatmap channels: arity + opening)...")
+    logger.info("Train at %sx%s; validation at native LMDB resolution", args.image_size, args.image_size)
+    train_set = WallLoader(args.data_path, "train.txt", lmdb_env, augmentations=train_aug)
+    val_set = WallLoader(args.data_path, "val.txt", lmdb_env, augmentations=val_aug)
+
+    if args.debug:
+        num_workers = 0
+        print("In debug mode.")
+        logger.info("In debug mode.")
+    else:
+        num_workers = max(0, args.num_workers)
+
+    logger.info(
+        "Wall DataLoader num_workers=%s prefetch_factor=%s",
         num_workers,
         max(2, int(args.prefetch_factor)) if num_workers > 0 else "n/a",
     )

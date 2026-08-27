@@ -46,9 +46,41 @@ class RandomRotations(object):
             self.augment = self.furu
         elif format == "cubi":
             self.augment = self.cubi
+        elif format == "wall":
+            self.augment = self.wall
 
     def __call__(self, sample):
         return self.augment(sample)
+
+    def wall(self, sample):
+        """Same coordinate rotation as .cubi, but no channel remap: wall-point channels
+        (arity, opening-endpoint) are rotation-invariant, unlike the direction-coded
+        junction-type channels .cubi's hmapp_convert_map was built for."""
+        fplan = sample["image"]
+        segmentation = sample["label"]
+        heatmap_points = sample["heatmaps"]
+        scale = sample["scale"]
+        num_of_rotations = int(torch.randint(0, 3, (1,)))
+
+        for i in range(num_of_rotations):
+            fplan = fplan.transpose(2, 1).flip(2)
+            segmentation = segmentation.transpose(2, 1).flip(2)
+            points_rotated = dict()
+            for channel, points in heatmap_points.items():
+                new_points = []
+                for point in points:
+                    x = fplan.shape[1] - 1 - point[1]
+                    y = point[0]
+                    new_points.append([x, y])
+                points_rotated[channel] = new_points
+            heatmap_points = points_rotated
+
+        return {
+            "image": fplan,
+            "label": segmentation,
+            "scale": scale,
+            "heatmaps": heatmap_points,
+        }
 
     def cubi(self, sample):
         fplan = sample["image"]
@@ -174,7 +206,14 @@ def clip_heatmaps(heatmaps, minx, maxx, miny, maxy):
 
 
 class DictToTensor(object):
-    def __init__(self, data_format="cubi"):
+    def __init__(self, data_format="cubi", n_channels=21, kernel_size=None):
+        """
+        n_channels/kernel_size only affect the .cubi branch (used by wall_loader.py to
+        rasterize the remapped 5-channel wall-point dict with a fixed, config-driven
+        gaussian instead of the default 21-channel / scale-dependent one).
+        """
+        self.n_channels = n_channels
+        self.kernel_size = kernel_size
         if data_format == "cubi":
             self.augment = self.cubi
         elif data_format == "furukawa":
@@ -189,7 +228,7 @@ class DictToTensor(object):
         heatmaps = sample["heatmaps"]
         scale = sample["scale"]
 
-        heatmap_tensor = np.zeros((21, height, width))
+        heatmap_tensor = np.zeros((self.n_channels, height, width))
         for channel, coords in heatmaps.items():
             for x, y in coords:
                 if x >= width:
@@ -199,7 +238,8 @@ class DictToTensor(object):
                 heatmap_tensor[int(channel), int(y), int(x)] = 1
 
         # Gaussian filter
-        kernel = svg_utils.get_gaussian2D(int(30 * scale))
+        kernel_size = self.kernel_size if self.kernel_size is not None else int(30 * scale)
+        kernel = svg_utils.get_gaussian2D(kernel_size)
         for i, h in enumerate(heatmap_tensor):
             heatmap_tensor[i] = cv2.filter2D(h, -1, kernel)
 

@@ -1,0 +1,48 @@
+# Wall-point-only training: 5 gaussian heatmap channels (4 junction-arity + 1 opening
+# endpoint), no room/icon segmentation. See plan_wall_training.md for the full design.
+
+# Model architecture:
+# - null: Furukawa stack (raw logits; sigmoid applied by the trainer)
+# - unet_resnet34 / unet_resnet50 / unet_resnet152
+# - segformer: Hugging Face SegFormer
+model: null
+segformer_model_name: nvidia/segformer-b0-finetuned-ade-512-512
+
+# Wall-point heatmap channels: 0-3 = arity 1/2/3/4, 4 = opening endpoint.
+n_wall_channels: 5
+
+# Gaussian kernel size (pixels, at final training resolution i.e. image_size) used to
+# rasterize each point into a heatmap. Thinner than the legacy ~30px kernel for sharper,
+# more precise point localization.
+kernel_px: 7
+
+# Loss: mse (plain per-pixel MSE) or focal-heatmap (CenterNet-style penalty-reduced
+# pixelwise focal loss — recommended once kernel_px is small, see criterion.py).
+criterion: mse
+
+# Point-detection validation metric (precision/recall/F1): local-max threshold and
+# match tolerance (pixels) between predicted and target-heatmap peaks.
+point_confidence_threshold: 0.5
+point_match_tolerance_px: 8
+
+optimizer: adam-patience-previous-best
+
+data_path: data/cubicasa5k/
+n_epoch: 350
+batch_size: 26
+image_size: 256
+
+l_rate: 0.0005
+l_rate_drop: 200
+patience: 20
+
+furukawa_weights: null
+resume_from: runs_cubi_wall/2026-08-24-15:48:12/model_best_val_loss.pkl
+
+log_path: runs_cubi_wall/
+plot_samples: true
+
+debug: false
+num_workers: 8
+prefetch_factor: 2
+scale: true
