@@ -1,212 +1,23 @@
 :root {
-  --bg: #0f1419;
-  --surface: #1a2332;
-  --border: #2d3a4f;
-  --text: #e7ecf3;
-  --muted: #8b9cb3;
-  --accent: #5b9fd4;
-  --accent-dim: #3d6f99;
   --h-panel: min(70vh, 780px);
 }
 
-* {
-  box-sizing: border-box;
-}
-
 body {
-  margin: 0;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  line-height: 1.35;
   font-size: 13px;
-}
-
-header {
-  padding: 0.5rem 0.75rem 0.35rem;
-  border-bottom: 1px solid var(--border);
-}
-
-h1 {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-
-.subtitle {
-  margin: 0.15rem 0 0;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  align-items: flex-end;
-  padding: 0.45rem 0.75rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.controls.criteria {
-  background: #16202e;
-}
-
-.source-fieldset {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin: 0;
-  padding: 0.35rem 0.6rem;
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-}
-
-.source-fieldset legend {
-  padding: 0 0.25rem;
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-
-label.inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: auto;
-  font-size: 0.8rem;
-  color: var(--text);
-  cursor: pointer;
 }
 
 .hidden {
   display: none !important;
 }
 
-#fileInput {
-  font-size: 0.75rem;
-  max-width: 220px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.7rem;
-  color: var(--muted);
-  min-width: 8rem;
-}
-
-select,
-button {
-  font: inherit;
-  font-size: 0.8rem;
-  padding: 0.3rem 0.45rem;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-}
-
-select {
-  min-width: 200px;
-  max-width: 320px;
-}
-
-button {
-  cursor: pointer;
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: #fff;
-  align-self: flex-end;
-}
-
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-button:not(:disabled):hover {
-  background: var(--accent);
-}
-
-input[type="range"] {
-  width: 160px;
-  accent-color: var(--accent);
-}
-
-output {
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  font-size: 0.8rem;
-}
-
-.thr-row {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.status {
-  align-self: center;
-  font-size: 0.75rem;
-  color: var(--muted);
-  max-width: 24rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .status.error {
-  color: #f08080;
+  color: var(--bs-danger);
   white-space: normal;
-}
-
-.grid1 {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.6rem;
-  padding: 0.6rem 0.75rem 1rem;
-  max-width: 1400px;
-  margin: 0 auto;
-}
-
-.panel {
-  margin: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-figcaption {
-  padding: 0.35rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.fig-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.fig-actions button {
-  padding: 0.2rem 0.45rem;
-  font-size: 0.7rem;
-  align-self: auto;
+  max-width: none;
 }
 
 .img-wrap {
-  flex: 1;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,19 +26,32 @@ figcaption {
   overflow: hidden;
   min-height: var(--h-panel);
   max-height: var(--h-panel);
+  touch-action: none;
+  cursor: grab;
 }
 
-.panel img {
+.img-wrap.dragging {
+  cursor: grabbing;
+}
+
+.img-wrap img {
   display: block;
   max-width: 100%;
   max-height: calc(var(--h-panel) - 8px);
   width: auto;
   height: auto;
   object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: opacity 0.15s ease;
 }
 
-.panel img:not([src]),
-.panel img[src=""] {
+.img-wrap img.loading {
+  opacity: 0.5;
+}
+
+.img-wrap img:not([src]),
+.img-wrap img[src=""] {
   opacity: 0.15;
   max-height: 48px;
 }

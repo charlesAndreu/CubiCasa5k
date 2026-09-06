@@ -1,118 +1,137 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Wall skeleton — post-process viewer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <h1>Wall skeleton viewer</h1>
-    <p class="subtitle">post_process_wall.py only — skeleton on map / segmentation / both, downloadable</p>
+  <header class="border-bottom bg-body-tertiary px-3 py-2">
+    <h1 class="h5 mb-0">Wall skeleton viewer</h1>
+    <p class="text-muted small mb-0">post_process_wall.py only — skeleton on map / segmentation / both, downloadable</p>
   </header>
 
-  <section class="controls">
-    <fieldset class="source-fieldset">
-      <legend>Input</legend>
-      <label class="inline">
-        <input type="radio" name="source" id="sourcePreset" value="preset" checked />
-        Test set
-      </label>
-      <label class="inline">
-        <input type="radio" name="source" id="sourceUpload" value="upload" />
-        Upload
-      </label>
-    </fieldset>
+  <section class="bg-body-tertiary border-bottom px-3 py-2">
+    <div class="d-flex flex-wrap align-items-end gap-3">
+      <fieldset class="border rounded px-2 py-1 d-flex align-items-center gap-3 m-0">
+        <legend class="visually-hidden">Input</legend>
+        <div class="form-check form-check-inline m-0">
+          <input class="form-check-input" type="radio" name="source" id="sourcePreset" value="preset" checked />
+          <label class="form-check-label small" for="sourcePreset">Test set</label>
+        </div>
+        <div class="form-check form-check-inline m-0">
+          <input class="form-check-input" type="radio" name="source" id="sourceUpload" value="upload" />
+          <label class="form-check-label small" for="sourceUpload">Upload</label>
+        </div>
+      </fieldset>
 
-    <label id="planLabel">
-      Plan
-      <select id="planSelect"></select>
-    </label>
+      <div id="planLabel">
+        <label for="planSelect" class="form-label small text-muted mb-1">Plan</label>
+        <select id="planSelect" class="form-select form-select-sm"></select>
+      </div>
 
-    <label id="uploadLabel" class="hidden">
-      Image
-      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/jpg,image/webp" />
-    </label>
+      <div id="uploadLabel" class="hidden">
+        <label for="fileInput" class="form-label small text-muted mb-1">Image</label>
+        <input type="file" id="fileInput" class="form-control form-control-sm" accept="image/png,image/jpeg,image/jpg,image/webp" />
+      </div>
 
-    <label>
-      Model
-      <select id="modelSelect">
-        <option value="">— checkpoint —</option>
-      </select>
-    </label>
+      <div>
+        <label for="modelSelect" class="form-label small text-muted mb-1">Model</label>
+        <select id="modelSelect" class="form-select form-select-sm">
+          <option value="">— checkpoint —</option>
+        </select>
+      </div>
 
-    <button id="runBtn" type="button" disabled>Run</button>
-    <span id="status" class="status"></span>
+      <button id="runBtn" type="button" class="btn btn-primary btn-sm" disabled>Run</button>
+      <span class="d-flex align-items-center gap-2">
+        <span id="statusSpinner" class="spinner-border spinner-border-sm text-primary hidden" role="status" aria-hidden="true"></span>
+        <span id="status" class="status small text-muted text-truncate"></span>
+      </span>
+    </div>
   </section>
 
-  <section class="controls">
-    <label>
-      Base layer
-      <select id="baseLayer">
-        <option value="map">Map</option>
-        <option value="segmentation">Segmentation</option>
-        <option value="both">Both (segmentation over map)</option>
-      </select>
-    </label>
-    <label id="segAlphaLabel" class="hidden">
-      Segmentation opacity
-      <span class="thr-row">
-        <input type="range" id="segAlpha" min="0" max="1" step="0.05" value="0.5" disabled />
-        <output id="segAlphaVal">0.50</output>
-      </span>
-    </label>
-  </section>
-
-  <section class="controls criteria">
-    <label>
-      Point threshold
-      <span class="thr-row">
-        <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.25" disabled />
-        <output id="thresholdVal">0.25</output>
-      </span>
-    </label>
-    <label>
-      Axis bias (H/V strength)
-      <span class="thr-row">
-        <input type="range" id="axisBias" min="0" max="5" step="0.1" value="0.35" disabled />
-        <output id="axisBiasVal">0.35</output>
-      </span>
-    </label>
-    <label>
-      Force alignment (snap, px offset allowed)
-      <span class="thr-row">
-        <input type="range" id="snapAlign" min="0" max="60" step="1" value="0" disabled />
-        <output id="snapAlignVal">0 (off)</output>
-      </span>
-    </label>
-    <label>
-      Wall pixel evidence (from segmentation)
-      <span class="thr-row">
-        <input type="range" id="wallEvidence" min="0" max="1" step="0.05" value="0.9" disabled />
-        <output id="wallEvidenceVal">0.90</output>
-      </span>
-    </label>
-    <label>
-      Min wall coverage to accept a line
-      <span class="thr-row">
-        <input type="range" id="minWallFraction" min="0" max="1" step="0.05" value="0.5" disabled />
-        <output id="minWallFractionVal">0.50</output>
-      </span>
-    </label>
-  </section>
-
-  <main class="grid1">
-    <figure class="panel">
-      <figcaption>
-        <span id="overlayCaption">Skeleton on map</span>
-        <span class="fig-actions">
-          <button id="dlOverlayPng" type="button" disabled>Download PNG</button>
-          <button id="dlSkeletonJson" type="button" disabled>Download geometry (JSON)</button>
+  <section class="bg-body-tertiary border-bottom px-3 py-2">
+    <div class="d-flex flex-wrap align-items-end gap-3">
+      <div>
+        <label for="baseLayer" class="form-label small text-muted mb-1">Base layer</label>
+        <select id="baseLayer" class="form-select form-select-sm">
+          <option value="map">Map</option>
+          <option value="segmentation">Segmentation</option>
+          <option value="both">Both (segmentation over map)</option>
+        </select>
+      </div>
+      <div id="segAlphaLabel" class="hidden">
+        <label for="segAlpha" class="form-label small text-muted mb-1">Segmentation opacity</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="segAlpha" class="form-range" min="0" max="1" step="0.05" value="0.5" disabled />
+          <output id="segAlphaVal" class="small">0.50</output>
         </span>
-      </figcaption>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-body-tertiary border-bottom px-3 py-2">
+    <div class="d-flex flex-wrap align-items-end gap-3">
+      <div>
+        <label for="method" class="form-label small text-muted mb-1">Method</label>
+        <select id="method" class="form-select form-select-sm">
+          <option value="score">Scored selection</option>
+          <option value="evidence" selected>Segmentation</option>
+        </select>
+      </div>
+      <div>
+        <label for="threshold" class="form-label small text-muted mb-1">Point threshold</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="threshold" class="form-range" min="0.05" max="0.95" step="0.01" value="0.25" disabled />
+          <output id="thresholdVal" class="small">0.25</output>
+        </span>
+      </div>
+      <div id="axisBiasLabel">
+        <label for="axisBias" class="form-label small text-muted mb-1">Selection strength</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="axisBias" class="form-range" min="0" max="5" step="0.1" value="0.35" disabled />
+          <output id="axisBiasVal" class="small">0.35</output>
+        </span>
+      </div>
+      <div>
+        <label for="snapAlign" class="form-label small text-muted mb-1">Cleanup tolerance, px</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="snapAlign" class="form-range" min="0" max="60" step="1" value="45" disabled />
+          <output id="snapAlignVal" class="small">45px</output>
+        </span>
+      </div>
+      <div>
+        <label for="wallEvidence" class="form-label small text-muted mb-1">Wall pixel evidence (from segmentation)</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="wallEvidence" class="form-range" min="0" max="1" step="0.05" value="0.85" disabled />
+          <output id="wallEvidenceVal" class="small">0.85</output>
+        </span>
+      </div>
+      <div>
+        <label for="minWallFraction" class="form-label small text-muted mb-1">Min wall coverage to accept a line</label>
+        <span class="d-flex align-items-center gap-2">
+          <input type="range" id="minWallFraction" class="form-range" min="0" max="1" step="0.05" value="0.8" disabled />
+          <output id="minWallFractionVal" class="small">0.80</output>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <main class="container-fluid py-3">
+    <div class="card">
+      <div class="card-header d-flex align-items-center justify-content-between gap-2">
+        <span id="overlayCaption">Skeleton on map</span>
+        <span class="d-flex align-items-center gap-2">
+          <span class="zoom-hint text-muted small">scroll to zoom, drag to pan</span>
+          <button id="resetViewBtn" type="button" class="btn btn-outline-secondary btn-sm" disabled>Reset view</button>
+          <button id="dlOverlayPng" type="button" class="btn btn-outline-secondary btn-sm" disabled>Download PNG</button>
+          <button id="dlSkeletonJson" type="button" class="btn btn-outline-secondary btn-sm" disabled>Download geometry (JSON)</button>
+        </span>
+      </div>
       <div class="img-wrap"><img id="imgOverlay" alt="Computed wall skeleton" /></div>
-    </figure>
+    </div>
   </main>
 
   <script src="/static/app.js"></script>

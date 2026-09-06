@@ -8,8 +8,8 @@ optimizer: adam-patience
 
 # Per-head class weights for UncertaintyCustomLoss (null to disable)
 # choices: null, inverse_sqrt_frequency, inverse_double_sqrt_frequency, inverse_frequency, effective_num
-room_weights_method: inverse_sqrt_frequency
-icon_weights_method: inverse_double_sqrt_frequency
+room_weights_method: null
+icon_weights_method: null
 
 # Data and training length
 data_path: data/cubicasa5k/

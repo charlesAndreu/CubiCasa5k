@@ -113,17 +113,22 @@ def _project_onto_segment(p, seg_start, seg_end):
 
 
 def _dominant_angles(
-    candidates, n_bins=180, min_separation_deg=15.0, top_k_extra=1,
-    cardinal_angles=(0.0, 90.0), extra_min_weight_fraction=0.5, extra_min_count=4,
+    candidates, n_bins=180, min_separation_deg=15.0, top_k_extra=2,
+    cardinal_angles=(0.0, 90.0), extra_min_weight_fraction=0.5, extra_min_count=3,
 ):
     """Horizontal/vertical always get the angle bonus baseline -- real floorplans are
     overwhelmingly axis-aligned, so cardinal directions shouldn't have to win a
     popularity contest against whatever this sample's candidates happen to contain.
     On top of that fixed baseline, still look for up to top_k_extra genuinely
-    well-supported *other* directions (a real angled wall, e.g. a bay window) -- this
-    is what keeps the design non-Manhattan-forced rather than reverting to the old
+    well-supported *other* directions (a real angled wall with several points on it,
+    e.g. a 15deg wall, or a whole non-cardinal room -- top_k_extra=2 so a diagonal
+    wall AND its perpendicular partner can both be found independently if both are
+    well-evidenced, without hardcoding that they must come as a pair) -- this is
+    what keeps the design non-Manhattan-forced rather than reverting to the old
     post-process's hardcoded 0/90/180/270-only behavior: a non-cardinal angle can
-    still earn the bonus, it just has to actually earn it.
+    still earn the bonus, it just has to actually earn it. The returned list is also
+    reused directly by snap_axis_aligned_points, so a well-evidenced non-cardinal
+    wall gets cleanly straightened too, not just preferred during selection.
 
     extra_min_count matters more than it looks: with a sparse candidate set, a single
     coincidental off-axis candidate can trivially tie extra_min_weight_fraction's
@@ -134,7 +139,8 @@ def _dominant_angles(
     wall entirely. Requiring an *absolute* minimum number of distinct supporting
     candidates (not just a fraction of an otherwise-small max) is what actually
     filters that out; a genuine repeated architectural angle has several edges
-    reinforcing it, a coincidence usually has one or two."""
+    reinforcing it (3, all-pairs among just 3 points on the same line), a
+    coincidence usually has one or two."""
     dominant = list(cardinal_angles)
     if not candidates:
         return dominant
@@ -206,14 +212,12 @@ def _passes_through_other_point(points, i, j, exclude, tolerance_px):
 
 def _wall_pixel_fraction(room_seg, wall_class_id, x1, y1, x2, y2):
     """Fraction of the candidate line's rasterized pixels that the model's own room
-    segmentation calls wall -- real pixel evidence, used as a *soft* scoring signal
-    only (see generate_candidates' wall_evidence_weight). Deliberately not a hard
-    veto: neither an average-coverage cutoff nor a longest-contiguous-run cutoff
-    survived verification against real predictions (both either rejected genuine
-    walls or let spurious diagonals back in) -- the segmentation signal is useful for
-    ranking candidates against each other, not for outright accepting/rejecting one
-    in isolation. Reuses the same bresenham_line the legacy post_prosessing.get_wall_lines
-    uses for this exact purpose (post_prosessing.py:243-246), (row, col) tuples."""
+    segmentation calls wall -- real pixel evidence, used both as a soft scoring
+    signal (generate_candidates' wall_evidence_weight) and as a hard accept/reject
+    threshold (min_wall_fraction, both generate_candidates and
+    select_wall_edges_by_evidence). Reuses the same bresenham_line the legacy
+    post_prosessing.get_wall_lines uses for this exact purpose
+    (post_prosessing.py:243-246), (row, col) tuples."""
     line_pixels = bresenham_line(int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2)))
     if not line_pixels:
         return 1.0
@@ -303,6 +307,11 @@ def select_wall_edges(
     """Greedy degree-constrained planar-graph construction: accept candidates in
     descending score order, subject to (a) each point's predicted arity budget and
     (b) no edge crossing an already-accepted edge except at a shared endpoint.
+    Returns (accepted, accepted_segments, dominant_angles) -- dominant_angles is the
+    same list _angle_bonus scored against (0, 90, plus any well-evidenced extra
+    angle from _dominant_angles), returned so snap_axis_aligned_points can clean up
+    against exactly the same reference set scoring used, rather than a separate,
+    narrower hardcoded one.
 
     Two segments sharing only an endpoint (the common case: two walls meeting at a
     corner) intersect on their boundary, not their interior, so shapely's `.crosses()`
@@ -329,44 +338,28 @@ def select_wall_edges(
     merely happens to have a leftover slot to fall into is not, and this gate is what
     tells them apart -- an unconditional extra slot would accept both.
     """
-    dominant_angles = _dominant_angles(candidates)
-    for c in candidates:
-        c["score"] = c["base_score"] * (1.0 + _angle_bonus(
-            c["angle_deg"], dominant_angles, angle_tolerance_deg, angle_bonus_weight
-        ))
-    # Length only breaks a near-tie (e.g. two candidates at the same angle, one a
-    # short real edge and one a coincidentally-parallel longer one) -- it must NOT
-    # shift the ranking of two candidates that already differ meaningfully on
-    # confidence/angle, or a genuinely long wall in its own direction gets penalized
-    # for being long with nothing to actually disambiguate against. length_tiebreak_eps
-    # is deliberately tiny relative to a real angle-bonus/confidence gap.
-    length_tiebreak_eps = 0.001
-    for c in candidates:
-        c["score"] -= length_tiebreak_eps * c["length"]
-
-    candidates_sorted = sorted(candidates, key=lambda c: c["score"], reverse=True)
     remaining_arity = [p["arity"] for p in points]
     grace_remaining = [max(0, min(arity_grace, max_hard_degree - p["arity"])) for p in points]
     accepted_scores_at = [[] for _ in points]
     accepted = []
     accepted_segments = []
 
-    for c in candidates_sorted:
+    def try_accept(c, score):
         i, j = c["i"], c["j"]
         over_i = remaining_arity[i] <= 0
         over_j = remaining_arity[j] <= 0
         if over_i and (grace_remaining[i] <= 0 or (
-            accepted_scores_at[i] and c["score"] < grace_relative_threshold * min(accepted_scores_at[i])
+            accepted_scores_at[i] and score < grace_relative_threshold * min(accepted_scores_at[i])
         )):
-            continue
+            return False
         if over_j and (grace_remaining[j] <= 0 or (
-            accepted_scores_at[j] and c["score"] < grace_relative_threshold * min(accepted_scores_at[j])
+            accepted_scores_at[j] and score < grace_relative_threshold * min(accepted_scores_at[j])
         )):
-            continue
+            return False
 
         seg = ((points[i]["x"], points[i]["y"]), (points[j]["x"], points[j]["y"]))
         if any(LineString(seg).crosses(LineString(other)) for other in accepted_segments):
-            continue
+            return False
 
         if over_i:
             grace_remaining[i] -= 1
@@ -376,30 +369,149 @@ def select_wall_edges(
             grace_remaining[j] -= 1
         else:
             remaining_arity[j] -= 1
-        accepted_scores_at[i].append(c["score"])
-        accepted_scores_at[j].append(c["score"])
+        accepted_scores_at[i].append(score)
+        accepted_scores_at[j].append(score)
         accepted.append(c)
         accepted_segments.append(seg)
+        return True
 
-    return accepted, accepted_segments
+    dominant_angles = _dominant_angles(candidates)
+    for c in candidates:
+        c["score"] = c["base_score"] * (1.0 + _angle_bonus(
+            c["angle_deg"], dominant_angles, angle_tolerance_deg, angle_bonus_weight
+        ))
+
+    # Break exact score ties by preferring the shorter candidate -- but only as a
+    # tie-break, never folded into `score` itself: at real floorplan scale (walls
+    # spanning hundreds of px) an *additive* per-pixel length penalty stops being a
+    # negligible epsilon and starts materially outscoring genuine long walls, which
+    # directly contradicts generate_candidates' own length_score design (long spans
+    # aren't penalized for being long). Sorting on a (score, length) tuple keeps the
+    # tie-break meaningless whenever scores actually differ, at any scale.
+    candidates_sorted = sorted(candidates, key=lambda c: (-c["score"], c["length"]))
+    for c in candidates_sorted:
+        try_accept(c, c["score"])
+
+    return accepted, accepted_segments, dominant_angles
+
+
+# ------------------------------------------------------------------
+# Alternate selection principle: segmentation decides topology directly,
+# instead of being one signal in a confidence/length/angle scoring race.
+# ------------------------------------------------------------------
+
+def select_wall_edges_by_evidence(
+    points, room_seg, wall_class_id=2, min_wall_fraction=0.5,
+    min_length_px=6.0, max_length_px=None, pass_through_tolerance_px=4.0,
+):
+    """Alternate to generate_candidates + select_wall_edges: an edge is a *candidate*
+    whenever the model's own segmentation directly supports it (wall-pixel fraction
+    along the line >= min_wall_fraction) -- no point-confidence product, no
+    length/angle scoring. Segmentation is treated as ground truth for whether a line
+    could be a wall at all, not a secondary veto layered onto a scoring race.
+
+    Each point's predicted arity is still enforced as a hard cap on its degree,
+    though: segmentation alone can't tell a genuine junction from a point that
+    merely sits near wall pixels in several directions (thick walls, a nearby
+    perpendicular corridor, segmentation noise), so an uncapped point can end up
+    with more accepted edges than it physically has arms for. When a point has more
+    evidence-valid candidates than its arity allows, only the top `arity` by
+    wall_fraction are kept -- still an evidence-only tie-break (the strongest
+    pixel support wins), not a reintroduction of the confidence/length/angle race
+    select_wall_edges uses.
+
+    This is still a real difference from that scoring race, though: the race can
+    drop a genuine connection because an unrelated, higher-scoring pair *elsewhere
+    in the graph* claimed a shared point's budget first (e.g. a long, low-confidence
+    corridor edge losing to a short high-confidence one at the same point). Here,
+    only candidates *at the same point* compete for that point's budget, and only
+    on wall_fraction -- there's no global confidence/length/angle race to lose to.
+
+    Still rejects a candidate that bypasses an intermediate point sitting on it
+    (_passes_through_other_point) -- that's basic geometry (the "real" wall is the
+    two sub-segments, not a redundant superset), not part of the scoring machinery
+    this replaces; without it, a straight run of points would each also connect to
+    every other point further down the same line, since the wall pixels support
+    those bypasses too.
+
+    No crossing check: that's the remaining tradeoff versus the scoring approach --
+    this can still accept a pair of edges that cross in their interior, if both
+    independently have wall evidence and arity room. That's part of the actual
+    comparison this alternate is for.
+
+    Requires room_seg: there's no other signal here to accept an edge on."""
+    if room_seg is None:
+        raise ValueError(
+            "select_wall_edges_by_evidence requires room_seg -- "
+            "evidence-first selection has no other signal to accept an edge on"
+        )
+
+    n = len(points)
+    valid = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = points[j]["x"] - points[i]["x"]
+            dy = points[j]["y"] - points[i]["y"]
+            length = math.hypot(dx, dy)
+            if length < min_length_px:
+                continue
+            if max_length_px is not None and length > max_length_px:
+                continue
+            if _passes_through_other_point(points, i, j, {i, j}, pass_through_tolerance_px):
+                continue
+            fraction = _wall_pixel_fraction(
+                room_seg, wall_class_id, points[i]["x"], points[i]["y"], points[j]["x"], points[j]["y"],
+            )
+            if fraction < min_wall_fraction:
+                continue
+            angle_deg = math.degrees(math.atan2(dy, dx))
+            valid.append({
+                "i": i, "j": j, "length": length, "angle_deg": angle_deg,
+                "wall_fraction": fraction,
+                "base_score": fraction,  # _dominant_angles' vote weight -- no other score exists here
+            })
+
+    remaining_arity = [p["arity"] for p in points]
+    accepted = []
+    accepted_segments = []
+    for c in sorted(valid, key=lambda c: c["wall_fraction"], reverse=True):
+        i, j = c["i"], c["j"]
+        if remaining_arity[i] <= 0 or remaining_arity[j] <= 0:
+            continue
+        remaining_arity[i] -= 1
+        remaining_arity[j] -= 1
+        accepted.append(c)
+        accepted_segments.append(((points[i]["x"], points[i]["y"]), (points[j]["x"], points[j]["y"])))
+
+    dominant_angles = _dominant_angles(accepted)
+    return accepted, accepted_segments, dominant_angles
 
 
 # ------------------------------------------------------------------
 # Openings: split wall edges at door/window gaps
 # ------------------------------------------------------------------
 
-def snap_axis_aligned_points(points, accepted_edges, snap_tolerance_px):
-    """Force-align points connected by an already-accepted near-horizontal (resp.
-    near-vertical) edge onto a shared exact y (resp. x) -- their average -- turning
-    "nearly straight" into "exactly straight". Opt-in (snap_tolerance_px=0/falsy
-    disables it): this deliberately only touches edges *already* close to cardinal,
-    so it cleans up noisy point predictions into crisp walls without ever forcing a
-    genuinely angled wall onto the grid -- same clustering idea as the legacy
-    points_to_manhantan (post_prosessing.py), but opt-in rather than always-on, and
-    only ever applied to edges the graph itself already decided were axis-aligned.
+def snap_axis_aligned_points(points, accepted_edges, snap_tolerance_px, dominant_angles=(0.0, 90.0)):
+    """Force-align points connected by an already-accepted edge close to one of
+    dominant_angles onto a shared coordinate perpendicular to that direction --
+    turning "nearly straight" into "exactly straight". Opt-in (snap_tolerance_px=0/
+    falsy disables it): this deliberately only touches edges *already* close to one
+    of these directions, so it cleans up noisy point predictions without ever
+    forcing a genuinely angled wall onto the grid -- same clustering idea as the
+    legacy points_to_manhantan (post_prosessing.py), but opt-in rather than
+    always-on, and only ever applied to edges the graph itself already decided fit.
 
-    The gate is an absolute *pixel* deviation from perfectly cardinal
-    (length * sin(angle-from-cardinal)), not a fixed angle: the same few degrees of
+    dominant_angles: defaults to plain (0, 90) for standalone use, but is meant to
+    be the *same* list select_wall_edges/_dominant_angles produced for scoring --
+    when a non-cardinal direction is well-evidenced enough to earn the selection
+    bonus, it should also get snapped cleanly, not just tolerated as noisy. Each
+    listed angle defines its own family (points connected by an edge near that
+    angle share the coordinate perpendicular to it, via a rotated-frame
+    projection); 0 and 90 as explicit separate entries is what reduces this
+    exactly to the plain horizontal/vertical formula for those two.
+
+    The gate is an absolute *pixel* deviation from the reference direction
+    (length * sin(angle-from-reference)), not a fixed angle: the same few degrees of
     deviation implies a tiny offset on a short wall but a large one on a long wall,
     so a fixed-angle gate would either be too eager to snap a long, genuinely tilted
     wall, or too strict to clean up an obviously-jittery short one. A fixed pixel
@@ -410,8 +522,8 @@ def snap_axis_aligned_points(points, accepted_edges, snap_tolerance_px):
         return points
 
     n = len(points)
-    parent_h = list(range(n))
-    parent_v = list(range(n))
+    refs = [a % 180.0 for a in dominant_angles]
+    parents = {ref: list(range(n)) for ref in refs}
 
     def find(parent, x):
         while parent[x] != x:
@@ -424,32 +536,46 @@ def snap_axis_aligned_points(points, accepted_edges, snap_tolerance_px):
         if ra != rb:
             parent[ra] = rb
 
+    def closest_ref(angle):
+        angle = angle % 180.0
+        best_ref, best_dist = refs[0], 180.0
+        for ref in refs:
+            d = min(abs(angle - ref), 180.0 - abs(angle - ref))
+            if d < best_dist:
+                best_dist, best_ref = d, ref
+        return best_ref, best_dist
+
     for c in accepted_edges:
-        angle = c["angle_deg"] % 180.0
-        dist_to_0 = min(angle, 180.0 - angle)
-        dist_to_90 = abs(angle - 90.0)
-        if dist_to_0 <= dist_to_90:
-            if c["length"] * math.sin(math.radians(dist_to_0)) <= snap_tolerance_px:
-                union(parent_h, c["i"], c["j"])
-        else:
-            if c["length"] * math.sin(math.radians(dist_to_90)) <= snap_tolerance_px:
-                union(parent_v, c["i"], c["j"])
+        ref, dist = closest_ref(c["angle_deg"])
+        if c["length"] * math.sin(math.radians(dist)) <= snap_tolerance_px:
+            union(parents[ref], c["i"], c["j"])
 
     snapped = [dict(p) for p in points]
 
-    def snap_clusters(parent, coord_key):
+    # Reads/writes `snapped` (not the original `points`): two of these families can
+    # share a coordinate axis (e.g. 0 and 90 are both expressed in plain x/y), so if
+    # this read from pristine `points` each time, whichever family ran second would
+    # silently overwrite the first family's fix to that shared axis. Reading the
+    # already-partially-snapped state instead makes all passes accumulate correctly:
+    # each only ever moves points along ITS OWN perpendicular direction, leaving
+    # whatever an earlier pass already set along that same axis alone.
+    for ref in refs:
+        parent = parents[ref]
         groups = {}
         for idx in range(n):
             groups.setdefault(find(parent, idx), []).append(idx)
+        phi = math.radians(ref)
+        u = (math.cos(phi), math.sin(phi))  # parallel unit vector
+        v = (-math.sin(phi), math.cos(phi))  # perpendicular unit vector
         for members in groups.values():
             if len(members) < 2:
                 continue
-            avg = sum(points[m][coord_key] for m in members) / len(members)
+            perp_avg = sum(snapped[m]["x"] * v[0] + snapped[m]["y"] * v[1] for m in members) / len(members)
             for m in members:
-                snapped[m][coord_key] = avg
+                par = snapped[m]["x"] * u[0] + snapped[m]["y"] * u[1]
+                snapped[m]["x"] = par * u[0] + perp_avg * v[0]
+                snapped[m]["y"] = par * u[1] + perp_avg * v[1]
 
-    snap_clusters(parent_h, "y")  # same-horizontal-cluster points share one y
-    snap_clusters(parent_v, "x")  # same-vertical-cluster points share one x
     return snapped
 
 
@@ -495,12 +621,18 @@ def build_wall_network(
     min_wall_fraction=0.5,
 ):
     """heatmaps: (5, H, W) numpy array of sigmoid-activated model predictions.
-    angle_bonus_weight: strength of the horizontal/vertical preference (0 = no axis
-    preference at all, higher = walls need stronger non-axis evidence to compete with
-    an axis-aligned alternative for the same point's arity budget).
+    angle_bonus_weight: strength of the alignment preference during edge SELECTION
+    (0 = no preference at all, higher = a non-aligned wall needs stronger other
+    evidence to compete with an aligned alternative for the same point's arity
+    budget) -- against the image's global 0/90 axes plus any well-evidenced
+    non-cardinal direction found per-plan (see _dominant_angles).
     snap_axis_tolerance_px: 0 disables (default). Otherwise, force-align points
-    connected by an accepted edge whose implied cardinal deviation is within this many
-    pixels onto a shared y/x -- see snap_axis_aligned_points.
+    connected by an accepted edge whose implied deviation from the *same* detected
+    angle set used for selection is within this many pixels onto a shared
+    coordinate -- see snap_axis_aligned_points. Distinct from angle_bonus_weight:
+    that affects which edges get selected (topology), this only cleans up the
+    coordinates of edges already selected (geometry) -- e.g. you can want strong
+    selection bias with no coordinate snapping, or vice versa.
     room_seg: optional (H, W) room/wall segmentation array (e.g. from the same
     train_full model's own room head -- viz_web already has this for free). When
     given, a candidate with less than min_wall_fraction of its line on wall_class_id
@@ -517,12 +649,61 @@ def build_wall_network(
         room_seg=room_seg, wall_class_id=wall_class_id, wall_evidence_weight=wall_evidence_weight,
         min_wall_fraction=min_wall_fraction,
     )
-    accepted_edges, wall_segments = select_wall_edges(
+    accepted_edges, wall_segments, dominant_angles = select_wall_edges(
         points, candidates, arity_grace=arity_grace, angle_bonus_weight=angle_bonus_weight,
     )
 
     if snap_axis_tolerance_px:
-        points = snap_axis_aligned_points(points, accepted_edges, snap_axis_tolerance_px)
+        points = snap_axis_aligned_points(points, accepted_edges, snap_axis_tolerance_px, dominant_angles=dominant_angles)
+        wall_segments = [
+            ((points[c["i"]]["x"], points[c["i"]]["y"]), (points[c["j"]]["x"], points[c["j"]]["y"]))
+            for c in accepted_edges
+        ]
+
+    openings = attach_openings(wall_segments, opening_points, perp_tolerance_px=perp_tolerance_px)
+
+    return {
+        "points": points,
+        "opening_points": opening_points,
+        "wall_segments": wall_segments,
+        "openings": openings,
+    }
+
+
+def build_wall_network_evidence(
+    heatmaps,
+    room_seg,
+    point_threshold=0.5,
+    opening_threshold=0.5,
+    min_length_px=6.0,
+    max_length_px=None,
+    perp_tolerance_px=12.0,
+    min_separation_px=15,
+    pass_through_tolerance_px=4.0,
+    snap_axis_tolerance_px=0,
+    wall_class_id=2,
+    min_wall_fraction=0.5,
+):
+    """Same stages, input, and output shape as build_wall_network (point extraction,
+    edge selection, optional axis-snap cleanup, opening attachment), but topology
+    comes from select_wall_edges_by_evidence instead of generate_candidates +
+    select_wall_edges -- see that function's docstring for the principle. Each
+    point's predicted arity is still a hard cap there, same as build_wall_network,
+    just with no angle_bonus_weight and no arity_grace: ties among a point's
+    evidence-valid candidates break on wall_fraction alone, and there's no soft
+    over-budget rescue. room_seg is required (unlike build_wall_network, where it's
+    optional extra evidence on top of scoring)."""
+    points = extract_wall_points(heatmaps, threshold=point_threshold, min_separation_px=min_separation_px)
+    opening_points = extract_opening_points(heatmaps, threshold=opening_threshold, min_separation_px=min_separation_px)
+
+    accepted_edges, wall_segments, dominant_angles = select_wall_edges_by_evidence(
+        points, room_seg, wall_class_id=wall_class_id, min_wall_fraction=min_wall_fraction,
+        min_length_px=min_length_px, max_length_px=max_length_px,
+        pass_through_tolerance_px=pass_through_tolerance_px,
+    )
+
+    if snap_axis_tolerance_px:
+        points = snap_axis_aligned_points(points, accepted_edges, snap_axis_tolerance_px, dominant_angles=dominant_angles)
         wall_segments = [
             ((points[c["i"]]["x"], points[c["i"]]["y"]), (points[c["j"]]["x"], points[c["j"]]["y"]))
             for c in accepted_edges

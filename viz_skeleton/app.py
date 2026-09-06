@@ -76,13 +76,17 @@ def _parse_source(body=None, args=None):
 
 
 def _wall_criteria(args):
-    """The new post-process's only tunable criteria."""
+    """The new post-process's only tunable criteria. method: "score" (confidence/
+    length/angle scoring race for each point's arity budget, see select_wall_edges)
+    or "evidence" (segmentation directly decides topology, see
+    select_wall_edges_by_evidence) -- axis_bias is unused in "evidence" mode."""
     return dict(
         threshold=float(args.get("threshold", 0.25)),
+        method=args.get("method", "evidence"),
         axis_bias=float(args.get("axis_bias", 0.35)),
-        snap_align=float(args.get("snap_align", 0.0)),
-        wall_evidence=float(args.get("wall_evidence", 0.9)),
-        min_wall_fraction=float(args.get("min_wall_fraction", 0.5)),
+        snap_align=float(args.get("snap_align", 45.0)),
+        wall_evidence=float(args.get("wall_evidence", 0.85)),
+        min_wall_fraction=float(args.get("min_wall_fraction", 0.8)),
     )
 
 

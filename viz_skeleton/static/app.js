@@ -15,6 +15,8 @@ const segAlphaLabel = $("segAlphaLabel");
 const segAlpha = $("segAlpha");
 const segAlphaVal = $("segAlphaVal");
 
+const methodSelect = $("method");
+const axisBiasLabel = $("axisBiasLabel");
 const threshold = $("threshold");
 const thresholdVal = $("thresholdVal");
 const axisBias = $("axisBias");
@@ -27,9 +29,11 @@ const minWallFraction = $("minWallFraction");
 const minWallFractionVal = $("minWallFractionVal");
 
 const imgOverlay = $("imgOverlay");
+const imgWrap = imgOverlay.parentElement;
 const overlayCaption = $("overlayCaption");
 const dlOverlayPng = $("dlOverlayPng");
 const dlSkeletonJson = $("dlSkeletonJson");
+const resetViewBtn = $("resetViewBtn");
 
 const criteriaInputs = [threshold, axisBias, snapAlign, wallEvidence, minWallFraction];
 const BASE_CAPTIONS = {
@@ -49,6 +53,16 @@ function isUploadMode() {
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || "";
   statusEl.classList.toggle("error", isError);
+}
+
+const statusSpinner = $("statusSpinner");
+let busyCount = 0;
+
+function setBusy(busy) {
+  busyCount = Math.max(0, busyCount + (busy ? 1 : -1));
+  const isBusy = busyCount > 0;
+  statusSpinner.classList.toggle("hidden", !isBusy);
+  imgOverlay.classList.toggle("loading", isBusy);
 }
 
 function cacheBust(url) {
@@ -89,6 +103,7 @@ function runBody() {
 function overlayQuery() {
   const q = {
     threshold: Number(threshold.value).toFixed(2),
+    method: methodSelect.value,
     axis_bias: Number(axisBias.value).toFixed(2),
     snap_align: Number(snapAlign.value).toFixed(0),
     wall_evidence: Number(wallEvidence.value).toFixed(2),
@@ -99,6 +114,11 @@ function overlayQuery() {
     q.seg_alpha = Number(segAlpha.value).toFixed(2);
   }
   return q;
+}
+
+function updateMethodUI() {
+  axisBiasLabel.classList.toggle("hidden", methodSelect.value === "evidence");
+  updateButtons();
 }
 
 function syncCriteriaLabels() {
@@ -132,8 +152,70 @@ function updateSourceUI() {
 function clearOutputs() {
   imgOverlay.removeAttribute("src");
   hasRun = false;
+  resetView();
   updateButtons();
 }
+
+// --- Pan/zoom: mouse wheel to zoom (toward the cursor), drag to pan. ---
+const view = { scale: 1, panX: 0, panY: 0 };
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 12;
+
+function applyView() {
+  imgOverlay.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.scale})`;
+}
+
+function resetView() {
+  view.scale = 1;
+  view.panX = 0;
+  view.panY = 0;
+  applyView();
+}
+
+imgWrap.addEventListener(
+  "wheel",
+  (e) => {
+    if (!imgOverlay.getAttribute("src")) return;
+    e.preventDefault();
+    const rect = imgWrap.getBoundingClientRect();
+    // cursor position relative to the wrap's center (transform-origin is center by default)
+    const cx = e.clientX - rect.left - rect.width / 2;
+    const cy = e.clientY - rect.top - rect.height / 2;
+    const prevScale = view.scale;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    view.scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.scale * factor));
+    if (view.scale === prevScale) return;
+    // keep the point under the cursor stationary while scaling around it
+    view.panX = cx - (cx - view.panX) * (view.scale / prevScale);
+    view.panY = cy - (cy - view.panY) * (view.scale / prevScale);
+    applyView();
+  },
+  { passive: false }
+);
+
+let dragging = false;
+let dragStart = { x: 0, y: 0, panX: 0, panY: 0 };
+
+imgWrap.addEventListener("mousedown", (e) => {
+  if (!imgOverlay.getAttribute("src")) return;
+  dragging = true;
+  imgWrap.classList.add("dragging");
+  dragStart = { x: e.clientX, y: e.clientY, panX: view.panX, panY: view.panY };
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  view.panX = dragStart.panX + (e.clientX - dragStart.x);
+  view.panY = dragStart.panY + (e.clientY - dragStart.y);
+  applyView();
+});
+
+window.addEventListener("mouseup", () => {
+  dragging = false;
+  imgWrap.classList.remove("dragging");
+});
+
+imgWrap.addEventListener("dblclick", resetView);
 
 async function fetchJson(url, opts) {
   const res = await fetch(url, opts);
@@ -208,6 +290,11 @@ async function init() {
 
   runBtn.addEventListener("click", runAll);
 
+  methodSelect.addEventListener("change", () => {
+    updateMethodUI();
+    if (hasRun) scheduleOverlayUpdate();
+  });
+
   baseLayer.addEventListener("change", () => {
     updateBaseLayerUI();
     updateButtons();
@@ -225,6 +312,8 @@ async function init() {
     });
   });
 
+  resetViewBtn.addEventListener("click", resetView);
+
   dlOverlayPng.addEventListener("click", () => {
     downloadBlob(`/api/overlay.png?${qs(overlayQuery())}`, "skeleton_overlay.png").catch((e) =>
       setStatus(e.message, true)
@@ -238,7 +327,7 @@ async function init() {
 
   syncCriteriaLabels();
   updateBaseLayerUI();
-  updateButtons();
+  updateMethodUI();
 }
 
 function updateButtons() {
@@ -247,16 +336,20 @@ function updateButtons() {
   const ready = hasModel && hasInput;
   runBtn.disabled = !ready;
   criteriaInputs.forEach((el) => (el.disabled = !ready));
+  axisBias.disabled = !ready || methodSelect.value === "evidence";
+  methodSelect.disabled = !ready;
   baseLayer.disabled = !ready;
   segAlpha.disabled = !ready || baseLayer.value !== "both";
   dlOverlayPng.disabled = !hasRun;
   dlSkeletonJson.disabled = !hasRun;
+  resetViewBtn.disabled = !hasRun;
 }
 
 async function runAll() {
   if (!modelId()) return;
   if (isUploadMode() && !uploadId) return;
   runBtn.disabled = true;
+  setBusy(true);
   setStatus("Running inference (first load may take a minute)…");
 
   try {
@@ -271,6 +364,7 @@ async function runAll() {
   } catch (e) {
     setStatus(e.message, true);
   } finally {
+    setBusy(false);
     updateButtons();
   }
 }
@@ -280,14 +374,25 @@ function scheduleOverlayUpdate() {
   postprocTimer = setTimeout(loadOverlay, 200);
 }
 
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    imgOverlay.onload = () => resolve();
+    imgOverlay.onerror = () => reject(new Error("Failed to load overlay image"));
+    imgOverlay.src = src;
+  });
+}
+
 async function loadOverlay() {
   if (!hasRun) return;
+  setBusy(true);
   setStatus("Computing wall skeleton…");
   try {
-    imgOverlay.src = cacheBust(`/api/overlay.png?${qs(overlayQuery())}`);
+    await loadImage(cacheBust(`/api/overlay.png?${qs(overlayQuery())}`));
     setStatus("Ready");
   } catch (e) {
     setStatus(e.message, true);
+  } finally {
+    setBusy(false);
   }
 }
 

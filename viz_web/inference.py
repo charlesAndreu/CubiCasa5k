@@ -47,6 +47,7 @@ from floortrans.loaders.room_icon_loaders import FullLoader  # noqa: E402
 from model import cubi_casa5k_full_model  # noqa: E402
 from post_process_wall import (  # noqa: E402
     build_wall_network,
+    build_wall_network_evidence,
     remap_prediction_to_wall_heatmaps,
     render_wall_network_bgr,
 )
@@ -82,7 +83,9 @@ def _image_bytes_to_model_tensor(data: bytes) -> torch.Tensor:
     return 2.0 * (t / 255.0) - 1.0
 
 
-def _resize_rgb(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> np.ndarray:
+def _resize_rgb(rgb: np.ndarray, max_side: int | None = DISPLAY_MAX_SIDE) -> np.ndarray:
+    if max_side is None:
+        return rgb
     h, w = rgb.shape[:2]
     if max(h, w) <= max_side:
         return rgb
@@ -92,7 +95,7 @@ def _resize_rgb(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> np.ndarray
     return cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
-def _png_bytes(rgb: np.ndarray, max_side: int = DISPLAY_MAX_SIDE) -> bytes:
+def _png_bytes(rgb: np.ndarray, max_side: int | None = DISPLAY_MAX_SIDE) -> bytes:
     """RGB uint8 (H, W, 3) -> PNG bytes (downscaled for the web UI)."""
     if rgb.dtype != np.uint8:
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
@@ -164,7 +167,7 @@ class CachedRun:
     postproc: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = field(
         default_factory=dict
     )
-    wall_postproc: dict[tuple[float, float, float, float], dict] = field(default_factory=dict)
+    wall_postproc: dict[tuple, dict] = field(default_factory=dict)
 
 
 class VizEngine:
@@ -414,10 +417,11 @@ class VizEngine:
         self,
         model_id: str,
         threshold: float,
+        method: str = "evidence",
         axis_bias: float = 0.35,
-        snap_align: float = 0.0,
-        wall_evidence: float = 0.9,
-        min_wall_fraction: float = 0.5,
+        snap_align: float = 45.0,
+        wall_evidence: float = 0.85,
+        min_wall_fraction: float = 0.8,
         plan_id: int | None = None,
         upload_id: str | None = None,
     ) -> dict:
@@ -426,45 +430,68 @@ class VizEngine:
         no separately trained train_wall.py checkpoint required. Returns the raw
         result dict (points/opening_points/wall_segments/openings); see
         postproc_wall_png for the rendered-PNG version and render_wall_network_bgr.
-        axis_bias: strength of the horizontal/vertical preference (angle_bonus_weight).
+        method: "score" (default) -- generate_candidates + select_wall_edges, a
+        confidence/length/angle-weighted greedy race for each point's arity budget.
+        "evidence" -- select_wall_edges_by_evidence: any pair the segmentation
+        itself supports (>= min_wall_fraction) is accepted directly, no scoring race
+        and no arity budget. axis_bias is unused in "evidence" mode -- there's no
+        selection race left for it to bias.
+        axis_bias: strength of the alignment preference used during edge SELECTION
+        (which edges get chosen -- topology), "score" mode only. Scored against the
+        image's global 0/90 axes plus any well-evidenced non-cardinal direction
+        found per-plan (see _dominant_angles) -- a genuinely angled wall with enough
+        points on it doesn't have to be forced toward 0/90 to earn this bonus.
         snap_align: 0 disables; otherwise forces points connected by an accepted
-        edge onto a shared exact x/y, gated by an absolute pixel deviation (not a
-        fixed angle -- see snap_axis_aligned_points for why) of up to this many px.
+        edge onto a shared coordinate (geometry cleanup, not topology), gated by an
+        absolute pixel deviation from that same detected angle set (not a fixed
+        angle -- see snap_axis_aligned_points for why) of up to this many px.
+        Distinct from axis_bias: you can want strong selection bias with no
+        coordinate snapping, or vice versa. Applies in both methods.
         wall_evidence: strength of real pixel evidence from this same model's own
         room/wall segmentation (run.rooms_seg) -- candidates under min_wall_fraction
         are hard-rejected outright; this controls a softer preference for
-        more-covered candidates on top of that.
-        min_wall_fraction: the hard-reject threshold for wall_evidence itself."""
+        more-covered candidates on top of that. "score" mode only ("evidence" mode
+        has no separate soft preference -- min_wall_fraction alone decides accept/reject).
+        min_wall_fraction: the hard-reject / accept threshold for wall evidence,
+        used by both methods."""
         run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         key = (
-            round(float(threshold), 3), round(float(axis_bias), 3),
+            method, round(float(threshold), 3), round(float(axis_bias), 3),
             round(float(snap_align), 2), round(float(wall_evidence), 3),
             round(float(min_wall_fraction), 3),
         )
         if key not in run.wall_postproc:
             wall_heatmaps = remap_prediction_to_wall_heatmaps(run.heatmaps)
-            run.wall_postproc[key] = build_wall_network(
-                wall_heatmaps, point_threshold=key[0], opening_threshold=key[0],
-                angle_bonus_weight=key[1], snap_axis_tolerance_px=key[2],
-                room_seg=run.rooms_seg, wall_class_id=WALL_CLASS, wall_evidence_weight=key[3],
-                min_wall_fraction=key[4],
-            )
+            if method == "evidence":
+                run.wall_postproc[key] = build_wall_network_evidence(
+                    wall_heatmaps, run.rooms_seg, point_threshold=key[1],
+                    opening_threshold=key[1], snap_axis_tolerance_px=key[3],
+                    wall_class_id=WALL_CLASS, min_wall_fraction=key[5],
+                )
+            else:
+                run.wall_postproc[key] = build_wall_network(
+                    wall_heatmaps, point_threshold=key[1], opening_threshold=key[1],
+                    angle_bonus_weight=key[2], snap_axis_tolerance_px=key[3],
+                    room_seg=run.rooms_seg, wall_class_id=WALL_CLASS, wall_evidence_weight=key[4],
+                    min_wall_fraction=key[5],
+                )
         return run.wall_postproc[key]
 
     def postproc_wall_png(
         self,
         model_id: str,
         threshold: float,
+        method: str = "evidence",
         axis_bias: float = 0.35,
-        snap_align: float = 0.0,
-        wall_evidence: float = 0.9,
-        min_wall_fraction: float = 0.5,
+        snap_align: float = 45.0,
+        wall_evidence: float = 0.85,
+        min_wall_fraction: float = 0.8,
         plan_id: int | None = None,
         upload_id: str | None = None,
     ) -> bytes:
         run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         result = self.wall_network_result(
-            model_id, threshold, axis_bias=axis_bias, snap_align=snap_align,
+            model_id, threshold, method=method, axis_bias=axis_bias, snap_align=snap_align,
             wall_evidence=wall_evidence, min_wall_fraction=min_wall_fraction,
             plan_id=plan_id, upload_id=upload_id,
         )
@@ -477,10 +504,12 @@ class VizEngine:
         threshold: float,
         base: str = "map",
         seg_alpha: float = 0.5,
+        method: str = "evidence",
         axis_bias: float = 0.35,
-        snap_align: float = 0.0,
-        wall_evidence: float = 0.9,
-        min_wall_fraction: float = 0.5,
+        snap_align: float = 45.0,
+        wall_evidence: float = 0.85,
+        min_wall_fraction: float = 0.8,
+        max_side: int | None = None,
         plan_id: int | None = None,
         upload_id: str | None = None,
     ) -> bytes:
@@ -488,10 +517,14 @@ class VizEngine:
         skeleton can be checked directly against the exact segmentation it was
         scored against, not just the raw plan. base: "map" (input plan only),
         "segmentation" (room_seg only), or "both" (segmentation alpha-blended over
-        the map at seg_alpha, then skeleton drawn on top of that)."""
+        the map at seg_alpha, then skeleton drawn on top of that).
+        max_side: None (default) serves native resolution -- unlike the other
+        artifact/postproc PNGs in this class (capped at DISPLAY_MAX_SIDE for a
+        grid of small panels), this is meant to be zoomed into, so it shouldn't be
+        pre-downscaled by the server."""
         run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
         result = self.wall_network_result(
-            model_id, threshold, axis_bias=axis_bias, snap_align=snap_align,
+            model_id, threshold, method=method, axis_bias=axis_bias, snap_align=snap_align,
             wall_evidence=wall_evidence, min_wall_fraction=min_wall_fraction,
             plan_id=plan_id, upload_id=upload_id,
         )
@@ -504,4 +537,4 @@ class VizEngine:
         else:
             base_bgr = run.input_bgr
         overlay_bgr = render_wall_network_bgr(base_bgr, result)
-        return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB))
+        return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB), max_side=max_side)
