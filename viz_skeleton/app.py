@@ -95,6 +95,14 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.route("/edit")
+def edit_page():
+    """Graph editor: freezes the currently-selected model/plan/upload + criteria
+    (passed as query params, same ones index.html's overlayQuery() builds) and lets
+    the user manually edit the resulting point/edge graph. See edit.js."""
+    return send_from_directory(STATIC_DIR, "edit.html")
+
+
 @app.get("/api/plans")
 def api_plans():
     return jsonify(get_engine().list_plans())
@@ -186,6 +194,29 @@ def api_overlay_png():
         png = get_engine().skeleton_overlay_png(
             model_id, base=base, seg_alpha=seg_alpha,
             plan_id=plan_id, upload_id=upload_id, **_wall_criteria(request.args)
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return Response(png, mimetype="image/png")
+
+
+@app.get("/api/base.png")
+def api_base_png():
+    """Same base layer as /api/overlay.png (map | segmentation | both), but with no
+    skeleton drawn on top -- the graph editor page draws its own interactive
+    point/edge overlay and needs a clean image underneath, at the same native
+    resolution/pixel space as /api/skeleton.json."""
+    model_id = request.args.get("model_id")
+    if not model_id:
+        return jsonify({"error": "model_id required"}), 400
+    try:
+        plan_id, upload_id = _parse_source(args=request.args)
+        base = request.args.get("base", "map")
+        seg_alpha = float(request.args.get("seg_alpha", 0.5))
+        png = get_engine().base_layer_png(
+            model_id, base=base, seg_alpha=seg_alpha, plan_id=plan_id, upload_id=upload_id,
         )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

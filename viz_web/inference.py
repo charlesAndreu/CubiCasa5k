@@ -538,3 +538,28 @@ class VizEngine:
             base_bgr = run.input_bgr
         overlay_bgr = render_wall_network_bgr(base_bgr, result)
         return _png_bytes(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB), max_side=max_side)
+
+    def base_layer_png(
+        self,
+        model_id: str,
+        base: str = "map",
+        seg_alpha: float = 0.5,
+        max_side: int | None = None,
+        plan_id: int | None = None,
+        upload_id: str | None = None,
+    ) -> bytes:
+        """Same base-layer compositing as skeleton_overlay_png (map / segmentation /
+        both), but with no skeleton drawn on top -- for the graph editor page, which
+        draws its own interactive point/edge overlay in the browser (SVG) and needs
+        a clean image underneath it, at the same native resolution and pixel
+        coordinate space the frozen skeleton.json it edits was computed in."""
+        run = self.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
+        if base == "segmentation":
+            base_bgr = cv2.cvtColor(_seg_rgb(run.rooms_seg, N_ROOM_CLASSES), cv2.COLOR_RGB2BGR)
+        elif base == "both":
+            seg_bgr = cv2.cvtColor(_seg_rgb(run.rooms_seg, N_ROOM_CLASSES), cv2.COLOR_RGB2BGR)
+            a = max(0.0, min(1.0, float(seg_alpha)))
+            base_bgr = cv2.addWeighted(seg_bgr, a, run.input_bgr, 1.0 - a, 0.0)
+        else:
+            base_bgr = run.input_bgr
+        return _png_bytes(cv2.cvtColor(base_bgr, cv2.COLOR_BGR2RGB), max_side=max_side)

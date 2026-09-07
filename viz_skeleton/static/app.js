@@ -34,6 +34,7 @@ const overlayCaption = $("overlayCaption");
 const dlOverlayPng = $("dlOverlayPng");
 const dlSkeletonJson = $("dlSkeletonJson");
 const resetViewBtn = $("resetViewBtn");
+const editGraphBtn = $("editGraphBtn");
 
 const criteriaInputs = [threshold, axisBias, snapAlign, wallEvidence, minWallFraction];
 const BASE_CAPTIONS = {
@@ -324,6 +325,9 @@ async function init() {
       setStatus(e.message, true)
     );
   });
+  editGraphBtn.addEventListener("click", () => {
+    window.location.href = `/edit?${qs(overlayQuery())}`;
+  });
 
   syncCriteriaLabels();
   updateBaseLayerUI();
@@ -342,6 +346,7 @@ function updateButtons() {
   segAlpha.disabled = !ready || baseLayer.value !== "both";
   dlOverlayPng.disabled = !hasRun;
   dlSkeletonJson.disabled = !hasRun;
+  editGraphBtn.disabled = !hasRun;
   resetViewBtn.disabled = !hasRun;
 }
 

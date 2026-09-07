@@ -1,0 +1,90 @@
+#canvasWrap {
+  padding: 0;
+  cursor: grab;
+}
+
+#canvasWrap.panning {
+  cursor: grabbing;
+}
+
+#canvas {
+  display: block;
+  width: 100%;
+  height: var(--h-panel);
+  user-select: none;
+}
+
+.gw-edge {
+  stroke: #ff00ff;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.gw-edge-hit {
+  stroke: transparent;
+  stroke-width: 20;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.gw-edge.selected {
+  stroke: #ffd83d;
+}
+
+.gw-point {
+  fill: #2fa8ff;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.gw-point.selected {
+  fill: #ffd83d;
+}
+
+.gw-point.fuse-target {
+  fill: #ff5b5b;
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+
+.gw-new-edge-preview {
+  stroke: #2fa8ff;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.gw-marquee {
+  fill: rgba(47, 168, 255, 0.15);
+  stroke: #2fa8ff;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.gw-guide {
+  stroke: #ff5b5b;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+#magnetismBtn.active {
+  background-color: var(--bs-primary);
+  color: #fff;
+}
+
+/* Bootstrap's default disabled outline-button state (opacity: .65, same
+   colored border/text) barely reads as "disabled" on a dark background --
+   make it unambiguous: flat grey, low opacity, no pointer affordance. */
+section .btn:disabled {
+  opacity: 0.35;
+  color: #8a8f98;
+  border-color: #495057;
+  background-color: transparent;
+  cursor: not-allowed;
+}
