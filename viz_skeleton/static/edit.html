@@ -9,11 +9,8 @@
   <link rel="stylesheet" href="/static/edit.css" />
 </head>
 <body>
-  <header class="border-bottom bg-body-tertiary px-3 py-2 d-flex align-items-center justify-content-between">
-    <div>
-      <h1 class="h5 mb-0">Wall graph editor</h1>
-      <p class="text-muted small mb-0">Frozen from the inference step -- edit points and walls by hand. Openings are not editable yet.</p>
-    </div>
+  <header class="border-bottom bg-body-tertiary px-3 py-1 d-flex align-items-center justify-content-between">
+    <h1 class="h6 mb-0">Wall graph editor</h1>
     <a href="/" class="btn btn-outline-secondary btn-sm">&larr; Back to inference</a>
   </header>
 
@@ -26,6 +23,7 @@
       <button id="dlEditedJson" type="button" class="btn btn-outline-secondary btn-sm" disabled>Download edited geometry (JSON)</button>
       <button id="resetViewBtn" type="button" class="btn btn-outline-secondary btn-sm" disabled>Reset view</button>
       <button id="magnetismBtn" type="button" class="btn btn-outline-primary btn-sm" aria-pressed="false">Magnetism: off</button>
+      <button id="continueToGeoBtn" type="button" class="btn btn-primary btn-sm" disabled>Continue to export &rarr;</button>
       <span class="d-flex align-items-center gap-2 ms-auto">
         <span id="statusSpinner" class="spinner-border spinner-border-sm text-primary hidden" role="status" aria-hidden="true"></span>
         <span id="status" class="status small text-muted text-truncate"></span>
@@ -33,7 +31,7 @@
     </div>
   </section>
 
-  <main class="container-fluid py-3">
+  <main class="container-fluid py-2">
     <div class="card">
       <div class="card-header d-flex align-items-center justify-content-between gap-2">
         <span id="selectionCaption">No selection</span>

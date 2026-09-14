@@ -278,6 +278,9 @@ async function init() {
 
   if (models.length === 0) {
     setStatus("No checkpoints found under runs_cubi*", true);
+  } else {
+    const defaultModel = models.find((m) => m.id.endsWith("2026-08-21-16:35:32"));
+    if (defaultModel) modelSelect.value = defaultModel.id;
   }
 
   sourcePreset.addEventListener("change", updateSourceUI);

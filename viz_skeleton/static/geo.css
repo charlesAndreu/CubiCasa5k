@@ -1,0 +1,64 @@
+#mapWrap {
+  padding: 0;
+}
+
+#map {
+  width: 100%;
+  height: calc(100vh - 110px);
+}
+
+#map.dragging-overlay {
+  cursor: grabbing !important;
+}
+
+.gw-wall-line {
+  cursor: grab;
+}
+
+#geocodeResults .list-group-item {
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+#geocodeResults .list-group-item:hover {
+  background-color: var(--bs-secondary-bg);
+}
+
+.gw-rotate-handle {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffd83d;
+  border: 2px solid #000;
+  border-radius: 50%;
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+
+.gw-handle {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 2px solid #2fa8ff;
+  box-sizing: border-box;
+}
+
+.gw-handle-both {
+  border-radius: 2px;
+  cursor: nwse-resize;
+}
+
+.gw-handle-x {
+  border-radius: 6px;
+  cursor: ew-resize;
+}
+
+.gw-handle-y {
+  border-radius: 6px;
+  cursor: ns-resize;
+}

@@ -21,10 +21,17 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
 
 from flask import Flask, Response, jsonify, request, send_from_directory
+from shapely.geometry import LineString
+from shapely.ops import unary_union
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -101,6 +108,16 @@ def edit_page():
     (passed as query params, same ones index.html's overlayQuery() builds) and lets
     the user manually edit the resulting point/edge graph. See edit.js."""
     return send_from_directory(STATIC_DIR, "edit.html")
+
+
+@app.route("/geo")
+def geo_page():
+    """Georeference + export: takes the edited graph (handed off via
+    sessionStorage by edit.js's "Continue to export" button -- no server state,
+    same as the editor itself), lets the user place it on a real map (geocoded
+    search or manual lat/lon) and translate/rotate/stretch it into alignment,
+    then exports consolidated wall geometry as GeoJSON. See geo.js."""
+    return send_from_directory(STATIC_DIR, "geo.html")
 
 
 @app.get("/api/plans")
@@ -241,6 +258,88 @@ def api_skeleton_json():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify(result)
+
+
+_NOMINATIM_USER_AGENT = "cubicasa5k-viz-skeleton/1.0 (internal dev tool)"
+_geocode_lock = threading.Lock()
+_last_geocode_call = 0.0
+
+
+@app.get("/api/geocode")
+def api_geocode():
+    """Proxies Nominatim's free geocoding search (https://nominatim.org) server
+    side. Two things a plain browser fetch can't do correctly: Nominatim's usage
+    policy (https://operations.osmfoundation.org/policies/nominatim/) requires a
+    request identifying the application via User-Agent, which browsers don't let
+    a page set on its own requests; and it caps usage at one request/second,
+    enforced here with a simple global throttle (single-user local dev tool, so a
+    process-wide lock is enough)."""
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"error": "q required"}), 400
+
+    global _last_geocode_call
+    with _geocode_lock:
+        wait = 1.0 - (time.time() - _last_geocode_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_geocode_call = time.time()
+
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+        {"q": q, "format": "jsonv2", "limit": 5}
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": _NOMINATIM_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return jsonify({"error": f"geocoding request failed: {e}"}), 502
+
+    return jsonify([
+        {"display_name": item.get("display_name"), "lat": float(item["lat"]), "lon": float(item["lon"])}
+        for item in data
+    ])
+
+
+@app.post("/api/outer_boundary")
+def api_outer_boundary():
+    """Finds the building's single outer envelope from a set of wall segments
+    (local pixel coordinates), for the georeferencing step's "outside" export --
+    one closed ring around the whole footprint, distinct from (and drawn bolder
+    than) the individual interior wall runs.
+
+    Deliberately NOT shapely.ops.polygonize: that only works on an *exactly*
+    closed line network, so any small gap or dangling stub -- routine in a
+    hand-edited graph -- makes the whole computation come back with nothing at
+    all for that section, which looks exactly like "missing segments" in the
+    export. Instead: thicken every wall line into a band (like giving it real
+    wall thickness, `gap_tolerance_px` wide) and union the bands together.
+    This bridges any gap up to about 2x the tolerance, and a stray unconnected
+    stub just shows up as a small bump instead of breaking anything -- works on
+    any set of segments, not just a topologically perfect closed loop. The
+    tradeoff is a small, constant outward offset (by gap_tolerance_px) versus
+    the true wall centerline, which is negligible next to hand-placing the
+    plan on a map. Returns {"boundary": null} only when there's truly nothing
+    to work with (no segments at all)."""
+    body = request.get_json(force=True, silent=True) or {}
+    segments = body.get("segments") or []
+    gap_tolerance_px = float(body.get("gap_tolerance_px", 6.0))
+    lines = [LineString(seg) for seg in segments if len(seg) >= 2]
+    if not lines:
+        return jsonify({"boundary": None})
+    try:
+        merged_lines = unary_union(lines)
+        dilated = merged_lines.buffer(gap_tolerance_px, join_style=2)
+        if dilated.is_empty:
+            return jsonify({"boundary": None})
+        exterior = (
+            dilated.exterior
+            if dilated.geom_type == "Polygon"
+            else max(dilated.geoms, key=lambda g: g.area).exterior
+        )
+        return jsonify({"boundary": [list(pt) for pt in exterior.coords]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def main():

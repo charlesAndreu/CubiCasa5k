@@ -20,6 +20,7 @@ const resetGraphBtn = document.getElementById("resetGraphBtn");
 const dlEditedJsonBtn = document.getElementById("dlEditedJson");
 const resetViewBtn = document.getElementById("resetViewBtn");
 const magnetismBtn = document.getElementById("magnetismBtn");
+const continueToGeoBtn = document.getElementById("continueToGeoBtn");
 
 // --- State: points/edges reference each other by stable integer id, not array
 // index, so deletions/fusions never have to renumber anything they don't touch. ---
@@ -510,6 +511,7 @@ function updateToolbarState() {
   resetGraphBtn.disabled = !originalSnapshot;
   dlEditedJsonBtn.disabled = state.points.length === 0;
   resetViewBtn.disabled = imgW === 0;
+  continueToGeoBtn.disabled = state.points.length === 0;
 }
 
 function updateMarquee(p1, p2) {
@@ -876,6 +878,34 @@ function downloadEditedJson() {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+continueToGeoBtn.addEventListener("click", () => {
+  // Hands the graph off via sessionStorage (same-tab, same-origin) rather than a
+  // server round-trip -- consistent with editing itself being purely client-side
+  // state; geo.js reads this key on load. Points/edges are passed with their
+  // stable ids intact (not the x/y-only wall_segments shape downloadEditedJson
+  // produces for external consumers), so the export step doesn't have to
+  // re-match coordinates back to ids the way loading skeleton.json originally did.
+  // Points left dangling with no wall at all (never connected, or orphaned by a
+  // deletion) carry nothing for georeferencing/export to use, so they're dropped
+  // here rather than passed through as stray unconnected markers.
+  const linkedPointIds = new Set();
+  state.edges.forEach((e) => {
+    linkedPointIds.add(e.a);
+    linkedPointIds.add(e.b);
+  });
+  const points = state.points.filter((p) => linkedPointIds.has(p.id)).map((p) => ({ ...p }));
+  try {
+    sessionStorage.setItem(
+      "cubi-geo-graph",
+      JSON.stringify({ points, edges: state.edges.map((e) => ({ ...e })) })
+    );
+  } catch (e) {
+    setStatus("Could not hand off the graph to the export step: " + e.message, true);
+    return;
+  }
+  window.location.href = "/geo";
+});
 
 undoBtn.addEventListener("click", undo);
 redoBtn.addEventListener("click", redo);
