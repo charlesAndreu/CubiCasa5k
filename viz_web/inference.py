@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import uuid
 from dataclasses import dataclass, field
 
@@ -184,6 +185,7 @@ class VizEngine:
         self._cache: dict[tuple, CachedRun] = {}
         self._uploads: dict[str, UploadedImage] = {}
         self._log = logging.getLogger("viz_web")
+        self._loader_lock = threading.Lock()
 
     @staticmethod
     def _load_presets():
@@ -215,21 +217,30 @@ class VizEngine:
     def _ensure_loader(self):
         if self._loader is not None:
             return
-        lmdb_path = os.path.join(self.data_path.rstrip(os.sep), "cubi_lmdb")
-        self._lmdb_env = lmdb.open(
-            lmdb_path,
-            readonly=True,
-            max_readers=8,
-            lock=False,
-            readahead=True,
-            meminit=False,
-        )
-        self._loader = FullLoader(
-            self.data_path,
-            "test.txt",
-            self._lmdb_env,
-            augmentations=DictToTensor(),
-        )
+        # Flask's dev server runs with threaded=True, so two requests landing
+        # at nearly the same moment (e.g. on first page load) can both see
+        # self._loader as None and both reach lmdb.open() on the same path --
+        # the second call then fails with "environment already open in this
+        # process". The lock makes only the first caller actually open it;
+        # everyone else just waits and reuses the result.
+        with self._loader_lock:
+            if self._loader is not None:
+                return
+            lmdb_path = os.path.join(self.data_path.rstrip(os.sep), "cubi_lmdb")
+            self._lmdb_env = lmdb.open(
+                lmdb_path,
+                readonly=True,
+                max_readers=8,
+                lock=False,
+                readahead=True,
+                meminit=False,
+            )
+            self._loader = FullLoader(
+                self.data_path,
+                "test.txt",
+                self._lmdb_env,
+                augmentations=DictToTensor(),
+            )
 
     def _get_model(self, model_id: str) -> torch.nn.Module:
         if model_id in self._models:
