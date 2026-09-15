@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import threading
@@ -111,10 +112,19 @@ def edit_page():
     return send_from_directory(STATIC_DIR, "edit.html")
 
 
+@app.route("/doors")
+def doors_page():
+    """Door editor: the step between the graph editor and the export. Takes the
+    edited wall graph (sessionStorage handoff, same as /geo) as fixed, shows the
+    openings the post-process detected on top of it, and lets the user move,
+    add or remove them. See doors.js."""
+    return send_from_directory(STATIC_DIR, "doors.html")
+
+
 @app.route("/geo")
 def geo_page():
-    """Georeference + export: takes the edited graph (handed off via
-    sessionStorage by edit.js's "Continue to export" button -- no server state,
+    """Georeference + export: takes the edited graph and its doors (handed off
+    via sessionStorage by doors.js's "Continue to export" button -- no server state,
     same as the editor itself), lets the user place it on a real map (geocoded
     search or manual lat/lon) and translate/rotate/stretch it into alignment,
     then exports consolidated wall geometry as GeoJSON. See geo.js."""
@@ -261,6 +271,96 @@ def api_skeleton_json():
     return jsonify(result)
 
 
+# The train_full model's icon head (see eval_full.py's N_ICON_CLASSES): the
+# same prediction the wall post-process takes its opening points from also
+# says, per pixel, whether an opening is a window or a door.
+ICON_WINDOW = 1
+ICON_DOOR = 2
+
+
+def _icon_votes(icons_seg, gap, radius_px):
+    """Counts window vs door pixels of the icon segmentation over one opening.
+
+    An opening is a span along a wall's centerline, and the icon blob for a
+    door or a window covers the wall's thickness around it -- so the samples
+    are taken along the span AND perpendicular to it, out to radius_px on
+    either side, rather than on the centerline alone, where one pixel of
+    misalignment with the wall would decide the answer."""
+    (x1, y1), (x2, y2) = gap[0], gap[1]
+    height, width = icons_seg.shape[:2]
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return 0, 0
+    nx, ny = -dy / length, dx / length
+    along = max(3, int(length / 2) + 1)
+    window_votes = door_votes = 0
+    for i in range(along + 1):
+        t = i / along
+        bx, by = x1 + dx * t, y1 + dy * t
+        for k in range(-2, 3):
+            off = radius_px * k / 2.0
+            xx, yy = int(round(bx + nx * off)), int(round(by + ny * off))
+            if 0 <= xx < width and 0 <= yy < height:
+                cls = int(icons_seg[yy, xx])
+                if cls == ICON_DOOR:
+                    door_votes += 1
+                elif cls == ICON_WINDOW:
+                    window_votes += 1
+    return door_votes, window_votes
+
+
+@app.get("/api/openings.json")
+def api_openings_json():
+    """The detected openings, each labelled "door", "window" or "unknown".
+
+    The wall post-process itself has a single opening class -- its heatmaps
+    only say "a wall is interrupted here" -- but the same model's icon head
+    does tell doors and windows apart, and its segmentation is in the same
+    pixel space as the opening geometry. So the label is read off icons_seg
+    over each opening's own span: whichever of the two classes has more
+    pixels there wins, and "unknown" means the icon head put neither at that
+    spot (a wall interruption that isn't recognisably either).
+
+    Same query parameters as /api/skeleton.json -- the openings come from the
+    same cached wall-network result."""
+    model_id = request.args.get("model_id")
+    if not model_id:
+        return jsonify({"error": "model_id required"}), 400
+    try:
+        plan_id, upload_id = _parse_source(args=request.args)
+        radius_px = float(request.args.get("icon_radius_px", 8.0))
+        engine = get_engine()
+        result = engine.wall_network_result(
+            model_id, plan_id=plan_id, upload_id=upload_id, **_wall_criteria(request.args)
+        )
+        run = engine.run_inference(model_id, plan_id=plan_id, upload_id=upload_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    openings = []
+    for op in result["openings"]:
+        gap = op["gap"]
+        door_votes, window_votes = _icon_votes(run.icons_seg, gap, radius_px)
+        if door_votes > window_votes:
+            kind = "door"
+        elif window_votes > 0:
+            kind = "window"
+        else:
+            kind = "unknown"
+        openings.append(
+            {
+                "gap": [list(gap[0]), list(gap[1])],
+                "kind": kind,
+                "door_px": door_votes,
+                "window_px": window_votes,
+            }
+        )
+    return jsonify({"openings": openings})
+
+
 _NOMINATIM_USER_AGENT = "cubicasa5k-viz-skeleton/1.0 (internal dev tool)"
 _geocode_lock = threading.Lock()
 _last_geocode_call = 0.0
@@ -340,7 +440,10 @@ def _band(lines, half_width):
     half a wall."""
     if not lines:
         return Polygon()
-    return linemerge(unary_union(lines)).buffer(half_width, cap_style=2, join_style=2)
+    merged = unary_union(lines)
+    if merged.geom_type == "MultiLineString":
+        merged = linemerge(merged)  # refuses anything that isn't already multi-part
+    return merged.buffer(half_width, cap_style=2, join_style=2)
 
 
 def _seal(band, door_bridge):
@@ -402,6 +505,14 @@ def api_footprint():
     the building that isn't a wall of the graph -- an outside wall is one of
     the same bands, just wider.
 
+    Doors: each one is a span ALONG a wall's centerline, and it is cut out of
+    the wall bands -- a door is a hole in the wall, so no wall is left inside
+    one. Rooms are taken before that cut, from the uncut band, so opening or
+    moving a door never changes a room's shape: a doorway is a way through a
+    wall, not a notch in the floor. Each band is cut only by a cutter as deep
+    as that band is thick, so a door on an inside wall can't nick the facade
+    it happens to sit near.
+
     Rooms: the enclosed voids of the final band -- literally its holes, which
     by construction follow the inner wall faces exactly ("just inside the
     walls") and can never overlap a wall. The band is sealed first (see
@@ -416,6 +527,7 @@ def api_footprint():
     request parameter rather than a constant."""
     body = request.get_json(force=True, silent=True) or {}
     segments = body.get("segments") or []
+    doors = body.get("doors") or []
     wall_width = float(body.get("wall_width", 0.2))
     exterior_width = float(body.get("exterior_width", wall_width))
     door_bridge = float(body.get("door_bridge", 0.9))
@@ -447,10 +559,16 @@ def api_footprint():
         if not ext_band.is_empty and not int_band.is_empty:
             int_band = int_band.difference(ext_band)
 
-        walls = unary_union([ext_band, int_band])
-        sealed = _seal(walls, door_bridge)
+        # Rooms come off the UNCUT band, so doors don't reshape them.
+        sealed = _seal(unary_union([ext_band, int_band]), door_bridge)
         rooms = [Polygon(hole) for poly in _iter_polygons(sealed) for hole in poly.interiors]
         rooms = [r for r in rooms if r.is_valid and r.area >= min_room_area]
+
+        door_lines = [LineString(d) for d in doors if len(d) >= 2]
+        if door_lines:
+            merged_doors = unary_union(door_lines)
+            ext_band = ext_band.difference(merged_doors.buffer(ext_half + 0.02, cap_style=2, join_style=2))
+            int_band = int_band.difference(merged_doors.buffer(half + 0.02, cap_style=2, join_style=2))
 
         return jsonify(
             {

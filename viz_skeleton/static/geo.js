@@ -56,6 +56,7 @@ function setBusy(busy) {
 let graph = { points: [], edges: [] };
 let pointById = new Map();
 let chains = []; // consolidated wall runs: each an array of point ids
+let doorSpans = []; // openings from the doors step: each [[x1,y1],[x2,y2]] along a wall, local pixels
 // Areal geometry from /api/footprint, in local pixel space like everything
 // else here: one entry per polygon, each [exteriorRing, ...holeRings], each
 // ring an array of [x, y]. All of it is rebuilt whenever the SCALE changes,
@@ -651,6 +652,9 @@ async function loadGraph() {
   localBBox = { minX, minY, maxX, maxY };
 
   chains = consolidate(graph.points, graph.edges);
+  // Doors are optional: reaching /geo without going through the doors step
+  // just means no openings are cut out of the walls.
+  doorSpans = Array.isArray(graph.doors) ? graph.doors : [];
 
   buildLayers();
   fitToOverlay();
@@ -662,7 +666,8 @@ async function loadGraph() {
     setStatus(
       `${bands} wall polygon${bands === 1 ? "" : "s"}` +
         ` (${Math.round(WALL_WIDTH_M * 100)}/${Math.round(EXTERIOR_WALL_WIDTH_M * 100)}cm inside/outside),` +
-        ` ${roomPolygons.length} room${roomPolygons.length === 1 ? "" : "s"}.`
+        ` ${roomPolygons.length} room${roomPolygons.length === 1 ? "" : "s"},` +
+        ` ${doorSpans.length} door${doorSpans.length === 1 ? "" : "s"} cut out.`
     );
   } catch (e) {
     setStatus("Could not build wall/room polygons: " + e.message, true);
@@ -684,11 +689,13 @@ async function fetchFootprint() {
     return [localToPlanMeters(a.x, a.y), localToPlanMeters(b.x, b.y)];
   });
   if (!segments.length) return { walls: [], exteriorWalls: [], rooms: [] };
+  const doors = doorSpans.map(([p1, p2]) => [localToPlanMeters(p1[0], p1[1]), localToPlanMeters(p2[0], p2[1])]);
   const res = await fetch("/api/footprint", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       segments,
+      doors,
       wall_width: WALL_WIDTH_M,
       exterior_width: EXTERIOR_WALL_WIDTH_M,
       door_bridge: DOOR_BRIDGE_M,

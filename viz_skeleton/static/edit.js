@@ -912,7 +912,10 @@ function downloadEditedJson() {
 continueToGeoBtn.addEventListener("click", () => {
   // Hands the graph off via sessionStorage (same-tab, same-origin) rather than a
   // server round-trip -- consistent with editing itself being purely client-side
-  // state; geo.js reads this key on load. Points/edges are passed with their
+  // state; the doors step reads this key on load, adds its doors to it, and
+  // passes the same object on to geo.js. The query string goes along in the URL
+  // so the doors step can ask for the same frozen model/plan/criteria this page
+  // was opened with. Points/edges are passed with their
   // stable ids intact (not the x/y-only wall_segments shape downloadEditedJson
   // produces for external consumers), so the export step doesn't have to
   // re-match coordinates back to ids the way loading skeleton.json originally did.
@@ -931,10 +934,10 @@ continueToGeoBtn.addEventListener("click", () => {
       JSON.stringify({ points, edges: state.edges.map((e) => ({ ...e })) })
     );
   } catch (e) {
-    setStatus("Could not hand off the graph to the export step: " + e.message, true);
+    setStatus("Could not hand off the graph to the doors step: " + e.message, true);
     return;
   }
-  window.location.href = "/geo";
+  window.location.href = `/doors${window.location.search}`;
 });
 
 undoBtn.addEventListener("click", undo);

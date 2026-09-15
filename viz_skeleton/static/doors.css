@@ -1,0 +1,56 @@
+/* Walls are fixed on this page -- drawn dimmer than in the wall editor so the
+   doors, which are the only thing editable here, read as the foreground. */
+.gw-wall {
+  stroke: #ff00ff;
+  stroke-width: 3;
+  stroke-opacity: 0.45;
+  vector-effect: non-scaling-stroke;
+}
+
+.gw-wall-hit {
+  stroke: transparent;
+  stroke-width: 20;
+  vector-effect: non-scaling-stroke;
+  cursor: copy;
+}
+
+.gw-door {
+  stroke: #35d07f;
+  stroke-width: 7;
+  stroke-linecap: butt;
+  vector-effect: non-scaling-stroke;
+}
+
+.gw-door.selected {
+  stroke: #ffd83d;
+}
+
+.gw-door-hit {
+  stroke: transparent;
+  stroke-width: 18;
+  stroke-linecap: butt;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+
+/* The two ends of a door, so a 4px-wide opening at low zoom is still visibly
+   an opening with a start and an end rather than a dot. */
+.gw-door-jamb {
+  stroke: #35d07f;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.gw-door-jamb.selected {
+  stroke: #ffd83d;
+}
+
+/* Drag either end of the selected door to resize it. */
+.gw-door-handle {
+  fill: #ffd83d;
+  stroke: #1b1d21;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: ew-resize;
+}
