@@ -253,12 +253,42 @@ function fusePoints(targetId, mergeId) {
   state.points = state.points.filter((p) => p.id !== mergeId);
 }
 
+// Deleting a selection removes the segments *between* selected points, then
+// drops only those selected points left with nothing attached. A point the
+// deleted line shares with the rest of the plan -- a wall junction, a corner
+// where another wall continues -- still has an edge that survives the action,
+// so it stays, and the walls hanging off it aren't shredded along with the
+// one being removed.
+//
+// A selected point with no selected neighbour has no segment of its own to
+// remove, so there the only possible intent is "delete this point": its
+// incident edges go with it, as they always did.
 function deleteSelected() {
   if (selection.size === 0) return;
   const before = snapshot();
   const ids = new Set(selection);
-  state.points = state.points.filter((p) => !ids.has(p.id));
-  state.edges = state.edges.filter((ed) => !ids.has(ed.a) && !ids.has(ed.b));
+
+  const hasSelectedEdge = new Set();
+  state.edges.forEach((ed) => {
+    if (ids.has(ed.a) && ids.has(ed.b)) {
+      hasSelectedEdge.add(ed.a);
+      hasSelectedEdge.add(ed.b);
+    }
+  });
+  const isLone = (id) => ids.has(id) && !hasSelectedEdge.has(id);
+
+  state.edges = state.edges.filter((ed) => {
+    if (ids.has(ed.a) && ids.has(ed.b)) return false;
+    return !isLone(ed.a) && !isLone(ed.b);
+  });
+
+  const stillConnected = new Set();
+  state.edges.forEach((ed) => {
+    stillConnected.add(ed.a);
+    stillConnected.add(ed.b);
+  });
+  state.points = state.points.filter((p) => !ids.has(p.id) || stillConnected.has(p.id));
+
   selection.clear();
   commitIfChanged(before);
 }

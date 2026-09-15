@@ -2,14 +2,20 @@ const METERS_PER_DEG_LAT = 111320;
 const COLLINEAR_TOLERANCE_DEG = 5;
 const DEFAULT_ANCHOR = { lat: 48.8566, lon: 2.3522 }; // Paris -- arbitrary, just so something is visible before the user places it
 const WALL_STROKE_WIDTH = 2;
-const OUTER_STROKE_WIDTH = WALL_STROKE_WIDTH * 2;
-// Exported "width" is a plain property (real-world meters), not baked into
-// the geometry -- there's no per-wall thickness in the source graph (it's
-// just centerlines), so these are reasonable stand-in constants rather than
-// a measurement. Unrelated to WALL_STROKE_WIDTH/OUTER_STROKE_WIDTH above,
-// which only control on-screen pixel rendering.
-const WALL_WIDTH_M = 0.1;
-const EXTERIOR_WALL_WIDTH_M = 0.2;
+// Real-world wall thickness (meters). The source graph is centerlines only,
+// with no measured thickness anywhere in it, so these are stand-in constants
+// sized from what a real wall measures: about 20cm for an inside wall, 35cm
+// for one facing outside. Which walls are "outside" is worked out from the
+// skeleton itself (see /api/footprint) -- an exterior wall is one of the same
+// bands as every other wall, just wider. Unrelated to WALL_STROKE_WIDTH
+// above, which only controls on-screen pixel rendering.
+const WALL_WIDTH_M = 0.2;
+const EXTERIOR_WALL_WIDTH_M = 0.35;
+// Widest wall gap still treated as a doorway (so: sealed) rather than as a
+// way out of the room, and the smallest void still worth exporting as a
+// room. See /api/footprint.
+const DOOR_BRIDGE_M = 0.9;
+const MIN_ROOM_AREA_M2 = 1.0;
 
 const statusEl = document.getElementById("status");
 const statusSpinner = document.getElementById("statusSpinner");
@@ -50,7 +56,13 @@ function setBusy(busy) {
 let graph = { points: [], edges: [] };
 let pointById = new Map();
 let chains = []; // consolidated wall runs: each an array of point ids
-let outerBoundary = null; // the building's single outer ring (local pixel [x,y] pairs), from /api/outer_boundary -- null if the walls don't form a closed loop
+// Areal geometry from /api/footprint, in local pixel space like everything
+// else here: one entry per polygon, each [exteriorRing, ...holeRings], each
+// ring an array of [x, y]. All of it is rebuilt whenever the SCALE changes,
+// since the thickness behind it is fixed in meters, not in pixels.
+let wallPolygons = [];
+let exteriorWallPolygons = [];
+let roomPolygons = [];
 
 function angleDiffDeg(a, b) {
   const d = Math.abs(a - b) % 360;
@@ -58,10 +70,12 @@ function angleDiffDeg(a, b) {
 }
 
 // Merges any chain of edges through a point where exactly 2 walls meet nearly
-// in a straight line (not a real corner) into one longer run, so export
-// produces one LineString per actual wall instead of one per tiny edited
-// segment. A point stays a hard break between two separate runs whenever it's
-// a dead end, a real junction (3+ walls), or a corner (2 walls at an angle).
+// in a straight line (not a real corner) into one longer run, so the map
+// draws one stroke per actual wall instead of one per tiny edited segment. A
+// point stays a hard break between two separate runs whenever it's a dead
+// end, a real junction (3+ walls), or a corner (2 walls at an angle). These
+// runs are the on-screen centerlines only -- what gets exported is the
+// buffered bands from /api/footprint, which works off the raw edges.
 function consolidate(points, edges) {
   pointById = new Map(points.map((p) => [p.id, p]));
   const adjacency = new Map(points.map((p) => [p.id, []]));
@@ -137,6 +151,21 @@ function localToLatLng(x, y) {
   return L.latLng(anchor.lat + dLat, anchor.lon + dLon);
 }
 
+// Wall thickness and the door-gap tolerance are real-world meters, so the
+// buffering that turns centerlines into wall bands has to happen in a metric
+// plane -- not in plan pixels, whose meaning changes every time the shape is
+// resized and whose x/y scales can even differ from each other. Plan-meter
+// space is exactly localToLatLng's own intermediate step, before the
+// rotation and the lat/lon conversion, both of which are rigid/conformal and
+// so leave a band's width alone once it's placed on the map.
+function localToPlanMeters(x, y) {
+  return [(x - localOrigin.x) * scaleXmPerPx, (y - localOrigin.y) * scaleYmPerPx];
+}
+
+function planMetersToLocal(xm, ym) {
+  return [xm / scaleXmPerPx + localOrigin.x, ym / scaleYmPerPx + localOrigin.y];
+}
+
 // Rotates a world point by deltaDeg (same clockwise-positive convention as
 // localToLatLng's own rotation) around an arbitrary world pivot. Rotating the
 // PLAN's content around an arbitrary point (not just around `anchor`) is done
@@ -205,7 +234,8 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 let wallLayers = []; // parallel to `chains`
-let outerBoundaryLayer = null;
+let wallPolygonLayers = []; // parallel to `wallPolygons`, then `exteriorWallPolygons`
+let roomLayers = []; // parallel to `roomPolygons`
 let handleMarkers = []; // parallel to getHandles(); shown only while selected
 let rotateHandleMarker = null; // single rotate handle; shown only while selected
 let rotateStalkLine = null; // thin line connecting the top-center handle to the rotate handle
@@ -333,6 +363,7 @@ function undoTransform() {
   scaleYmPerPx = prev.scaleYmPerPx;
   updateOverlay();
   updateHandlePositions();
+  scheduleFootprintRefresh(); // undoing a resize puts the scale back, so the meter-sized bands need rebuilding too
   setStatus("Undid last placement change.");
 }
 
@@ -367,6 +398,7 @@ function screenPointFor(latlng) {
 }
 
 function endDragGesture() {
+  if (dragGestureMode === "resize") scheduleFootprintRefresh();
   dragGestureMode = null;
   map.dragging.enable();
   document.getElementById("map").classList.remove("dragging-overlay");
@@ -395,7 +427,8 @@ function attachOverlayDrag() {
       const target = nativeEvent.target;
       const handleEl = target && target.closest && target.closest(".gw-handle");
       const rotateHandleEl = target && target.closest && target.closest(".gw-rotate-handle");
-      const hitWall = target && target.closest && target.closest(".gw-wall-line");
+      const hitWall =
+        target && target.closest && target.closest(".gw-wall-line, .gw-wall-poly, .gw-room-poly");
       const onShape = !!(handleEl || rotateHandleEl || hitWall);
 
       if (selected && handleEl) {
@@ -515,34 +548,73 @@ map.on("mousemove", (e) => {
   })
 );
 
+// A footprint polygon ([exteriorRing, ...holeRings] in local pixels) in the
+// nested-array form Leaflet's L.polygon takes, which is the same nesting
+// GeoJSON uses for a Polygon.
+function polygonLatLngs(rings) {
+  return rings.map((ring) => ring.map(([x, y]) => localToLatLng(x, y)));
+}
+
 function buildLayers() {
   wallLayers.forEach((l) => map.removeLayer(l));
-  if (outerBoundaryLayer) map.removeLayer(outerBoundaryLayer);
 
   wallLayers = chains.map((chain) => {
     const latlngs = chain.map((id) => localToLatLng(pointById.get(id).x, pointById.get(id).y));
     return L.polyline(latlngs, { color: "#ff00ff", weight: WALL_STROKE_WIDTH, className: "gw-wall-line" }).addTo(map);
   });
+  restackLayers();
+}
 
-  outerBoundaryLayer = null;
-  if (outerBoundary) {
-    const latlngs = outerBoundary.map(([x, y]) => localToLatLng(x, y));
-    outerBoundaryLayer = L.polyline(latlngs, {
+// The areal layers -- what actually gets exported now -- drawn under the
+// centerlines rather than instead of them: a 20cm band is well under a pixel
+// wide at a zoomed-out view, so the fixed-width strokes stay on top as the
+// thing you can always see and grab.
+function buildFootprintLayers() {
+  roomLayers.forEach((l) => map.removeLayer(l));
+  wallPolygonLayers.forEach((l) => map.removeLayer(l));
+
+  roomLayers = roomPolygons.map((rings) =>
+    L.polygon(polygonLatLngs(rings), {
+      color: "#4da3ff",
+      weight: 1,
+      fillColor: "#4da3ff",
+      fillOpacity: 0.25,
+      className: "gw-room-poly",
+    }).addTo(map)
+  );
+  // Interior and exterior bands are drawn the same -- they differ only in
+  // thickness, which is in the geometry itself.
+  wallPolygonLayers = [...wallPolygons, ...exteriorWallPolygons].map((rings) =>
+    L.polygon(polygonLatLngs(rings), {
       color: "#ff00ff",
-      weight: OUTER_STROKE_WIDTH,
-      className: "gw-wall-line",
-    }).addTo(map);
-    outerBoundaryLayer.bringToBack(); // the bolder outline shouldn't visually cover the thinner interior walls
-  }
+      weight: 0,
+      fillColor: "#ff00ff",
+      fillOpacity: 0.85,
+      className: "gw-wall-poly",
+    }).addTo(map)
+  );
+  restackLayers();
+}
+
+// Back to front: rooms, the wall bands, then the centerlines. Leaflet stacks
+// by insertion order, and the two layer groups are rebuilt independently of
+// each other, so the order is re-asserted explicitly instead of being left to
+// whichever was built last.
+function restackLayers() {
+  roomLayers.forEach((l) => l.bringToFront());
+  wallPolygonLayers.forEach((l) => l.bringToFront());
+  wallLayers.forEach((l) => l.bringToFront());
 }
 
 function updateOverlay() {
   chains.forEach((chain, i) => {
     wallLayers[i].setLatLngs(chain.map((id) => localToLatLng(pointById.get(id).x, pointById.get(id).y)));
   });
-  if (outerBoundaryLayer) {
-    outerBoundaryLayer.setLatLngs(outerBoundary.map(([x, y]) => localToLatLng(x, y)));
-  }
+  // Translating/rotating just re-projects these; only a scale change makes
+  // their (meter-based) thickness wrong, and that schedules a recompute.
+  roomLayers.forEach((l, i) => l.setLatLngs(polygonLatLngs(roomPolygons[i])));
+  const bands = [...wallPolygons, ...exteriorWallPolygons];
+  wallPolygonLayers.forEach((l, i) => l.setLatLngs(polygonLatLngs(bands[i])));
 }
 
 // --- Loading the graph handed off by the editor -----------------------------
@@ -580,38 +652,82 @@ async function loadGraph() {
 
   chains = consolidate(graph.points, graph.edges);
 
+  buildLayers();
+  fitToOverlay();
+
   setBusy(true);
   try {
-    outerBoundary = await fetchOuterBoundary();
+    await refreshFootprint();
+    const bands = wallPolygons.length + exteriorWallPolygons.length;
+    setStatus(
+      `${bands} wall polygon${bands === 1 ? "" : "s"}` +
+        ` (${Math.round(WALL_WIDTH_M * 100)}/${Math.round(EXTERIOR_WALL_WIDTH_M * 100)}cm inside/outside),` +
+        ` ${roomPolygons.length} room${roomPolygons.length === 1 ? "" : "s"}.`
+    );
   } catch (e) {
-    outerBoundary = null;
+    setStatus("Could not build wall/room polygons: " + e.message, true);
   } finally {
     setBusy(false);
   }
 
-  buildLayers();
-  fitToOverlay();
-
   dlGeoJsonBtn.disabled = false;
 }
 
-async function fetchOuterBoundary() {
+// Wall bands + room polygons for the CURRENT scale. Sent (and returned) in
+// plan-meter space so the server's buffer distances are real meters, then
+// converted straight back to local pixels, which is what every other piece
+// of geometry on this page is in.
+async function fetchFootprint() {
   const segments = graph.edges.map((ed) => {
     const a = pointById.get(ed.a);
     const b = pointById.get(ed.b);
-    return [
-      [a.x, a.y],
-      [b.x, b.y],
-    ];
+    return [localToPlanMeters(a.x, a.y), localToPlanMeters(b.x, b.y)];
   });
-  const res = await fetch("/api/outer_boundary", {
+  if (!segments.length) return { walls: [], exteriorWalls: [], rooms: [] };
+  const res = await fetch("/api/footprint", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ segments }),
+    body: JSON.stringify({
+      segments,
+      wall_width: WALL_WIDTH_M,
+      exterior_width: EXTERIOR_WALL_WIDTH_M,
+      door_bridge: DOOR_BRIDGE_M,
+      min_room_area: MIN_ROOM_AREA_M2,
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
-  return data.boundary || null;
+  const toLocal = (rings) => rings.map((ring) => ring.map(([xm, ym]) => planMetersToLocal(xm, ym)));
+  return {
+    walls: (data.walls || []).map(toLocal),
+    exteriorWalls: (data.exterior_walls || []).map(toLocal),
+    rooms: (data.rooms || []).map(toLocal),
+  };
+}
+
+let footprintSeq = 0;
+let footprintTimer = null;
+
+// Resizing changes how many meters a pixel is worth, so the bands have to be
+// rebuilt at the new scale -- debounced, because a resize drag fires this on
+// every mousemove, and sequence-checked, because responses can land out of
+// order and the last request started is the only one still describing the
+// shape on screen.
+function scheduleFootprintRefresh(delay = 250) {
+  clearTimeout(footprintTimer);
+  footprintTimer = setTimeout(() => {
+    refreshFootprint().catch((e) => setStatus("Footprint: " + e.message, true));
+  }, delay);
+}
+
+async function refreshFootprint() {
+  const seq = ++footprintSeq;
+  const fp = await fetchFootprint();
+  if (seq !== footprintSeq) return;
+  wallPolygons = fp.walls;
+  exteriorWallPolygons = fp.exteriorWalls;
+  roomPolygons = fp.rooms;
+  buildFootprintLayers();
 }
 
 function fitToOverlay() {
@@ -729,67 +845,64 @@ useLatLonBtn.addEventListener("click", () => {
 
 dlGeoJsonBtn.addEventListener("click", () => {
   // Matches the shape of real exported Wemap venue files (checked against
-  // several actual examples): flat properties -- indoor/level/building set
-  // directly on the feature, NOT nested under a tags/metadata wrapper -- and
-  // walls as plain LineStrings with a "width" property (real-world meters)
-  // rather than geometry with real thickness baked in (this tool only has
-  // wall centerlines to work with, not measured thickness, so a width
-  // parameter is the honest representation). The exterior wall is
-  // distinguished from interior walls exactly like those real files do: the
-  // same "indoor": "wall" tag, plus "building": "yes" alongside it. A
-  // separate "indoor": "level" feature (same ring, no width) is also always
-  // present in those files and is required for the Pro dashboard's own
-  // "Add level from file" upload gate (venueService.findLevelFeature) to
-  // accept the file at all.
+  // several actual examples): flat properties -- indoor/level set directly on
+  // the feature, NOT nested under a tags/metadata wrapper.
+  //
+  // Walls go out as Polygons with their thickness in the geometry (bands
+  // built by /api/footprint from the centerline graph), not as centerline
+  // LineStrings -- a wall is a surface in the target venue model, and a
+  // renderer given a bare centerline has to guess. The "width" property is
+  // kept alongside as the thickness each band was built with. Walls facing
+  // outside are wider, but they're the same kind of feature and come from
+  // the same skeleton: nothing is exported that isn't a wall of the graph.
+  //
+  // Rooms are the voids those wall bands enclose, so each one sits flush
+  // against the inner wall faces and no doorway splits it -- see
+  // /api/footprint.
+  //
+  // Walls and rooms, and nothing else: no building envelope, no level
+  // boundary, no centerlines. Every feature in the file is a Polygon.
   const levelNumber = getLevelNumber();
-  const wallFeatures = chains.map((chain, i) => ({
+  const ringsToCoords = (rings) =>
+    rings.map((ring) =>
+      ring.map(([x, y]) => {
+        const ll = localToLatLng(x, y);
+        return [ll.lng, ll.lat];
+      })
+    );
+
+  const bandFeature = (rings, id, width) => ({
+    type: "Feature",
+    properties: { external_id: id, indoor: "wall", level: levelNumber, width },
+    geometry: { type: "Polygon", coordinates: ringsToCoords(rings) },
+  });
+
+  const wallFeatures = [
+    ...wallPolygons.map((rings, i) => bandFeature(rings, `wall-${i}`, WALL_WIDTH_M)),
+    ...exteriorWallPolygons.map((rings, i) => bandFeature(rings, `wall-ext-${i}`, EXTERIOR_WALL_WIDTH_M)),
+  ];
+  // The bands ARE the walls now -- there's no centerline geometry to fall
+  // back on that wouldn't be a LineString -- so a failed footprint request
+  // means there is nothing to export, and saying so beats writing a file
+  // with no walls in it.
+  if (!wallFeatures.length) {
+    setStatus("No wall polygons to export -- the footprint request failed. Try again.", true);
+    return;
+  }
+
+  const roomFeatures = roomPolygons.map((rings, i) => ({
     type: "Feature",
     properties: {
-      external_id: `wall-${i}`,
-      indoor: "wall",
+      external_id: `room-${i}`,
+      indoor: "room",
       level: levelNumber,
-      width: WALL_WIDTH_M,
     },
-    geometry: {
-      type: "LineString",
-      coordinates: chain.map((id) => {
-        const ll = localToLatLng(pointById.get(id).x, pointById.get(id).y);
-        return [ll.lng, ll.lat];
-      }),
-    },
+    geometry: { type: "Polygon", coordinates: ringsToCoords(rings) },
   }));
-
-  let exteriorFeatures = [];
-  if (outerBoundary) {
-    // outerBoundary's first/last point already coincide (straight from
-    // shapely's exterior.coords), so this is already a closed ring.
-    const ring = outerBoundary.map(([x, y]) => {
-      const ll = localToLatLng(x, y);
-      return [ll.lng, ll.lat];
-    });
-    exteriorFeatures = [
-      {
-        type: "Feature",
-        properties: {
-          external_id: "wall-exterior",
-          indoor: "wall",
-          building: "yes",
-          level: levelNumber,
-          width: EXTERIOR_WALL_WIDTH_M,
-        },
-        geometry: { type: "LineString", coordinates: ring },
-      },
-      {
-        type: "Feature",
-        properties: { external_id: "level-boundary", indoor: "level", level: levelNumber },
-        geometry: { type: "LineString", coordinates: ring },
-      },
-    ];
-  }
 
   const featureCollection = {
     type: "FeatureCollection",
-    features: [...exteriorFeatures, ...wallFeatures],
+    features: [...roomFeatures, ...wallFeatures],
   };
   const blob = new Blob([JSON.stringify(featureCollection, null, 2)], { type: "application/geo+json" });
   const url = URL.createObjectURL(blob);

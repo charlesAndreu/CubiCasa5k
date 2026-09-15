@@ -30,8 +30,9 @@ import urllib.parse
 import urllib.request
 
 from flask import Flask, Response, jsonify, request, send_from_directory
-from shapely.geometry import LineString
-from shapely.ops import unary_union
+from shapely.geometry import LineString, Polygon
+from shapely.geometry.polygon import orient
+from shapely.ops import linemerge, unary_union
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -301,43 +302,163 @@ def api_geocode():
     ])
 
 
-@app.post("/api/outer_boundary")
-def api_outer_boundary():
-    """Finds the building's single outer envelope from a set of wall segments
-    (local pixel coordinates), for the georeferencing step's "outside" export --
-    one closed ring around the whole footprint, distinct from (and drawn bolder
-    than) the individual interior wall runs.
+def _iter_polygons(geom):
+    """Every Polygon inside a shapely result, whatever wrapper it came back in
+    (Polygon / MultiPolygon / GeometryCollection). A negative buffer in
+    particular can return any of the three, or an empty geometry."""
+    if geom.is_empty:
+        return
+    if geom.geom_type == "Polygon":
+        yield geom
+    elif geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+        for part in geom.geoms:
+            yield from _iter_polygons(part)
 
-    Deliberately NOT shapely.ops.polygonize: that only works on an *exactly*
-    closed line network, so any small gap or dangling stub -- routine in a
-    hand-edited graph -- makes the whole computation come back with nothing at
-    all for that section, which looks exactly like "missing segments" in the
-    export. Instead: thicken every wall line into a band (like giving it real
-    wall thickness, `gap_tolerance_px` wide) and union the bands together.
-    This bridges any gap up to about 2x the tolerance, and a stray unconnected
-    stub just shows up as a small bump instead of breaking anything -- works on
-    any set of segments, not just a topologically perfect closed loop. The
-    tradeoff is a small, constant outward offset (by gap_tolerance_px) versus
-    the true wall centerline, which is negligible next to hand-placing the
-    plan on a map. Returns {"boundary": null} only when there's truly nothing
-    to work with (no segments at all)."""
+
+def _polygon_rings(poly):
+    """[exterior, *holes] as plain [x, y] lists -- GeoJSON Polygon ring order,
+    with GeoJSON's winding too (RFC 7946: exterior counter-clockwise, holes
+    clockwise), since these rings are written straight into the export."""
+    poly = orient(poly, sign=1.0)
+    return [[list(pt) for pt in poly.exterior.coords]] + [
+        [list(pt) for pt in hole.coords] for hole in poly.interiors
+    ]
+
+
+def _band(lines, half_width):
+    """The wall band for a set of centerlines: each thickened by half_width on
+    either side, all of them unioned.
+
+    The linemerge() is not cosmetic. Buffering a bundle of separate two-point
+    segments thickens every one of them on its own, so where two walls meet at
+    a corner the outer corner square -- half a wall on each side -- belongs to
+    neither rectangle, and the band comes out of the corner visibly notched.
+    Merged into continuous runs first, that corner is a join rather than two
+    flat caps, and join_style=2 (mitre) makes it a proper square 90deg one.
+    Flat caps still apply where a wall genuinely ends -- a merged run's own two
+    ends -- so a dead-end stub stops at its endpoint instead of overshooting by
+    half a wall."""
+    if not lines:
+        return Polygon()
+    return linemerge(unary_union(lines)).buffer(half_width, cap_style=2, join_style=2)
+
+
+def _seal(band, door_bridge):
+    """Morphological closing: seals any opening up to `door_bridge` wide while
+    leaving every wall face away from the gap exactly where it was. Mitre
+    joins on both halves, so corners stay square instead of being rounded off
+    by the erosion."""
+    if door_bridge <= 0:
+        return band
+    r = door_bridge / 2.0
+    return band.buffer(r, join_style=2).buffer(-r, join_style=2)
+
+
+def _filled_outline(band):
+    """The building's outer face: the band's exterior rings with their holes
+    filled back in, so what's left is the outline around the whole footprint
+    and nothing about the rooms inside it. Used only to tell outside walls
+    from inside ones -- it is not exported."""
+    filled = [Polygon(poly.exterior) for poly in _iter_polygons(band)]
+    return unary_union(filled) if filled else band
+
+
+def _runs_along(line, outline, max_dist, coverage=0.6, samples=16):
+    """True when most of `line` runs within max_dist of `outline` -- the test
+    for "this wall is on the outside of the building". Sampled along the
+    segment rather than measured at its midpoint or its ends: an interior wall
+    meeting an exterior one has an endpoint right on the outline, and only
+    looking at how much of its LENGTH is out there tells the two apart."""
+    hits = sum(
+        1
+        for i in range(samples + 1)
+        if outline.distance(line.interpolate(i / samples, normalized=True)) <= max_dist
+    )
+    return hits >= coverage * (samples + 1)
+
+
+@app.post("/api/footprint")
+def api_footprint():
+    """Turns the wall *centerline* graph into the areal layers the export
+    needs: the walls themselves with a real thickness, and the rooms they
+    enclose.
+
+    Works in whatever planar unit the caller sends -- geo.js sends plan-meters
+    (local pixels times the current m/px scale), so wall_width,
+    exterior_width, door_bridge and min_room_area are real-world meters here
+    and a buffer is a real wall thickness, independent of the plan's pixel
+    resolution or of how the user has stretched the shape on the map.
+
+    Walls: every segment thickened by half its width on each side, then
+    unioned, so corners and T-junctions merge into one clean band instead of a
+    pile of overlapping rectangles. Flat caps, so a dead-end stub stops at its
+    own endpoint instead of overshooting by half a wall; mitre joins, so
+    corners stay square rather than rounded off.
+
+    Outside walls are thicker (exterior_width instead of wall_width), and
+    which ones those are is read off the skeleton itself: build the band at
+    the nominal width, seal its doorways, and any segment that then runs along
+    the outer face of that band is an outside wall. Nothing is drawn around
+    the building that isn't a wall of the graph -- an outside wall is one of
+    the same bands, just wider.
+
+    Rooms: the enclosed voids of the final band -- literally its holes, which
+    by construction follow the inner wall faces exactly ("just inside the
+    walls") and can never overlap a wall. The band is sealed first (see
+    _seal), so an opening up to door_bridge wide -- a doorway, or a gap left
+    by an edge deleted in the editor -- can neither cut a room in two nor let
+    it bleed into the next room. Voids below min_room_area are dropped as
+    slivers.
+
+    Note the sealing also erases any genuine room space narrower than
+    door_bridge (a 60cm broom cupboard, say) -- the price of not needing the
+    network to be topologically perfect, and the reason door_bridge is a
+    request parameter rather than a constant."""
     body = request.get_json(force=True, silent=True) or {}
     segments = body.get("segments") or []
-    gap_tolerance_px = float(body.get("gap_tolerance_px", 6.0))
+    wall_width = float(body.get("wall_width", 0.2))
+    exterior_width = float(body.get("exterior_width", wall_width))
+    door_bridge = float(body.get("door_bridge", 0.9))
+    min_room_area = float(body.get("min_room_area", 1.0))
+
+    empty = {"walls": [], "exterior_walls": [], "rooms": []}
     lines = [LineString(seg) for seg in segments if len(seg) >= 2]
-    if not lines:
-        return jsonify({"boundary": None})
+    if not lines or wall_width <= 0:
+        return jsonify(empty)
+
     try:
-        merged_lines = unary_union(lines)
-        dilated = merged_lines.buffer(gap_tolerance_px, join_style=2)
-        if dilated.is_empty:
-            return jsonify({"boundary": None})
-        exterior = (
-            dilated.exterior
-            if dilated.geom_type == "Polygon"
-            else max(dilated.geoms, key=lambda g: g.area).exterior
+        half = wall_width / 2.0
+        ext_half = max(exterior_width, wall_width) / 2.0
+
+        # Pass 1, at the nominal width only: what the outer face of the
+        # building looks like, which is what says whether a wall is outside.
+        outline = _filled_outline(_seal(_band(lines, half), door_bridge))
+        tolerance = half + max(wall_width * 0.25, 0.02)
+        outside = [_runs_along(ln, outline.boundary, tolerance) for ln in lines]
+        exterior = [ln for ln, is_out in zip(lines, outside) if is_out]
+        interior = [ln for ln, is_out in zip(lines, outside) if not is_out]
+
+        # Pass 2: the real bands, each at its own width. The interior band
+        # gives way to the exterior one where they meet, so the two sets of
+        # polygons stay disjoint and each can honestly carry the width it was
+        # built with.
+        ext_band = _band(exterior, ext_half)
+        int_band = _band(interior, half)
+        if not ext_band.is_empty and not int_band.is_empty:
+            int_band = int_band.difference(ext_band)
+
+        walls = unary_union([ext_band, int_band])
+        sealed = _seal(walls, door_bridge)
+        rooms = [Polygon(hole) for poly in _iter_polygons(sealed) for hole in poly.interiors]
+        rooms = [r for r in rooms if r.is_valid and r.area >= min_room_area]
+
+        return jsonify(
+            {
+                "walls": [_polygon_rings(p) for p in _iter_polygons(int_band)],
+                "exterior_walls": [_polygon_rings(p) for p in _iter_polygons(ext_band)],
+                "rooms": [_polygon_rings(p) for p in rooms],
+            }
         )
-        return jsonify({"boundary": [list(pt) for pt in exterior.coords]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

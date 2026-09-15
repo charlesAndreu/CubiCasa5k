@@ -11,7 +11,9 @@
   cursor: grabbing !important;
 }
 
-.gw-wall-line {
+.gw-wall-line,
+.gw-wall-poly,
+.gw-room-poly {
   cursor: grab;
 }
 
