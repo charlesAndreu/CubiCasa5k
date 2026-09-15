@@ -1,0 +1,80 @@
+/* Shortcut overlay, shared by the editor pages. Bootstrap's own modal needs
+   its JS bundle, which these pages don't load (CSS only), so this is a plain
+   overlay -- no dependency, nothing to initialise. */
+.gw-help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.gw-help-backdrop[hidden] {
+  display: none !important;
+}
+
+.gw-help-panel {
+  width: min(92vw, 720px);
+  max-height: 84vh;
+  overflow: auto;
+  padding: 1rem 1.25rem 1.25rem;
+  border: 1px solid var(--bs-border-color, #495057);
+  border-radius: 0.5rem;
+  background: var(--bs-body-bg, #212529);
+  color: var(--bs-body-color, #dee2e6);
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.5);
+}
+
+.gw-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.gw-help-head h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.gw-help-section {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.gw-help-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.gw-help-panel td {
+  padding: 0.22rem 0.5rem 0.22rem 0;
+  vertical-align: top;
+}
+
+.gw-help-panel td:first-child {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.gw-help-panel kbd {
+  display: inline-block;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--bs-border-color, #495057);
+  border-bottom-width: 2px;
+  border-radius: 0.25rem;
+  background: var(--bs-tertiary-bg, #2b3035);
+  color: inherit;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}

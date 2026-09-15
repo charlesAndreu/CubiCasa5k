@@ -1,5 +1,12 @@
+/* Left-drag selects, so the canvas reads as a selection surface by default;
+   the grab cursor now appears only while a pan gesture is actually available
+   (space held) or under way. */
 #canvasWrap {
   padding: 0;
+  cursor: default;
+}
+
+#canvasWrap.pan-ready {
   cursor: grab;
 }
 

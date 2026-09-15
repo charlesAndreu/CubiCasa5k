@@ -5,7 +5,9 @@ const ZOOM_MAX_SCALE = 1;
 const ALIGN_SNAP_VIEW_FRACTION = 0.01; // point-to-point x/y alignment tolerance, relative to view width
 const ANGLE_SNAP_DEG = 4; // edge-angle tolerance around each 45deg step (so 90deg corners included)
 const ANGLE_STEP_DEG = 45;
-const ALIGN_SELECT_VIEW_FRACTION = 0.006; // double-click-on-edge "aligned points" perpendicular-distance delta
+const ALIGN_SELECT_VIEW_FRACTION = 0.006; // alt-double-click-on-edge "aligned points" perpendicular-distance delta
+const NUDGE_PX = 1;
+const NUDGE_COARSE_PX = 10; // shift+arrow, the usual 10x step
 
 const svg = document.getElementById("canvas");
 const canvasWrap = document.getElementById("canvasWrap");
@@ -21,6 +23,7 @@ const dlEditedJsonBtn = document.getElementById("dlEditedJson");
 const resetViewBtn = document.getElementById("resetViewBtn");
 const magnetismBtn = document.getElementById("magnetismBtn");
 const continueToGeoBtn = document.getElementById("continueToGeoBtn");
+const helpBtn = document.getElementById("helpBtn");
 
 // --- State: points/edges reference each other by stable integer id, not array
 // index, so deletions/fusions never have to renumber anything they don't touch. ---
@@ -46,6 +49,7 @@ let view = { x: 0, y: 0, w: 0, h: 0 };
 
 let dragMode = null; // 'move' | 'pan' | 'marquee' | 'new-edge' | null
 let dragData = {};
+let spaceHeld = false; // space = temporary hand tool, as in every design app
 
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || "";
@@ -236,6 +240,29 @@ function addEdge(aId, bId) {
   return e;
 }
 
+// Splits a wall at `pos` (projected onto the wall, so the new point lands ON
+// it rather than wherever the cursor happened to be) and replaces it with the
+// two halves. The standard double-click-a-segment gesture of every vertex
+// editor; the new point comes out selected, ready to be dragged.
+function insertPointOnEdge(edge, pos) {
+  const a = getPoint(edge.a);
+  const b = getPoint(edge.b);
+  if (!a || !b) return;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-9) return;
+  const t = Math.min(1, Math.max(0, ((pos.x - a.x) * dx + (pos.y - a.y) * dy) / lenSq));
+  const before = snapshot();
+  const p = addPoint(a.x + t * dx, a.y + t * dy, 2, 1.0);
+  state.edges = state.edges.filter((ed) => ed.id !== edge.id);
+  addEdge(edge.a, p.id);
+  addEdge(p.id, edge.b);
+  selection.clear();
+  selection.add(p.id);
+  commitIfChanged(before);
+}
+
 function fusePoints(targetId, mergeId) {
   if (targetId === mergeId) return;
   state.edges.forEach((ed) => {
@@ -363,23 +390,33 @@ function svgFromClientUsingMatrix(clientX, clientY, invMatrix) {
   return pt.matrixTransform(invMatrix);
 }
 
+// Zooms by `factor` about a fixed point -- the cursor for the wheel, the
+// middle of the view for the keyboard. render() afterwards because point
+// radius is derived from view.w: without it, zooming in leaves the circles at
+// their old size in user units and they balloon on screen.
+function zoomBy(factor, about) {
+  if (!imgW) return;
+  const curScale = view.w / imgW;
+  const newScale = Math.min(ZOOM_MAX_SCALE, Math.max(ZOOM_MIN_SCALE, curScale * factor));
+  if (newScale === curScale) return;
+  const cx = about ? about.x : view.x + view.w / 2;
+  const cy = about ? about.y : view.y + view.h / 2;
+  const fracX = (cx - view.x) / view.w;
+  const fracY = (cy - view.y) / view.h;
+  view.w = imgW * newScale;
+  view.h = imgH * newScale;
+  view.x = cx - fracX * view.w;
+  view.y = cy - fracY * view.h;
+  applyView();
+  render();
+}
+
 svg.addEventListener(
   "wheel",
   (e) => {
     if (!imgW) return;
     e.preventDefault();
-    const cursor = svgFromClient(e.clientX, e.clientY);
-    const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
-    const curScale = view.w / imgW;
-    const newScale = Math.min(ZOOM_MAX_SCALE, Math.max(ZOOM_MIN_SCALE, curScale * factor));
-    if (newScale === curScale) return;
-    const fracX = (cursor.x - view.x) / view.w;
-    const fracY = (cursor.y - view.y) / view.h;
-    view.w = imgW * newScale;
-    view.h = imgH * newScale;
-    view.x = cursor.x - fracX * view.w;
-    view.y = cursor.y - fracY * view.h;
-    applyView();
+    zoomBy(e.deltaY < 0 ? 1 / 1.15 : 1.15, svgFromClient(e.clientX, e.clientY));
   },
   { passive: false }
 );
@@ -390,12 +427,18 @@ svg.addEventListener("dblclick", (e) => {
   const edgeEl = e.target.closest("[data-edge-id]");
   if (edgeEl) {
     const edge = state.edges.find((ed) => ed.id === Number(edgeEl.dataset.edgeId));
-    if (edge) {
+    if (!edge) return;
+    // Alt+double-click keeps the wall-specific gesture: select the whole
+    // aligned run this wall belongs to. Plain double-click does what a
+    // double-click on a segment does everywhere else -- insert a point there.
+    if (e.altKey) {
       const tol = Math.max(2, view.w * ALIGN_SELECT_VIEW_FRACTION);
       if (!e.shiftKey) selection.clear();
       alignedConnectedPoints(edge, tol).forEach((id) => selection.add(id));
       render();
+      return;
     }
+    insertPointOnEdge(edge, svgFromClient(e.clientX, e.clientY));
     return;
   }
 
@@ -544,6 +587,25 @@ function updateToolbarState() {
   continueToGeoBtn.disabled = state.points.length === 0;
 }
 
+// Live marquee selection, applied as the band is dragged rather than only on
+// release: plain drag replaces the selection, shift adds to it, alt takes
+// away -- the combination every vector editor uses. `base` is the selection
+// as it was when the drag started, so growing and shrinking the band stays
+// reversible within the same gesture.
+function applyMarquee(p1, p2, mode, base) {
+  const x1 = Math.min(p1.x, p2.x);
+  const x2 = Math.max(p1.x, p2.x);
+  const y1 = Math.min(p1.y, p2.y);
+  const y2 = Math.max(p1.y, p2.y);
+  const inside = new Set();
+  state.points.forEach((p) => {
+    if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) inside.add(p.id);
+  });
+  if (mode === "add") selection = new Set([...base, ...inside]);
+  else if (mode === "subtract") selection = new Set([...base].filter((id) => !inside.has(id)));
+  else selection = inside;
+}
+
 function updateMarquee(p1, p2) {
   const x1 = Math.min(p1.x, p2.x);
   const y1 = Math.min(p1.y, p2.y);
@@ -599,13 +661,45 @@ function beginMoveDrag(svgPos, e) {
   };
 }
 
+function beginPanDrag(svgPos, e) {
+  dragMode = "pan";
+  dragData = {
+    invCtm0: svg.getScreenCTM().inverse(),
+    startSvg: svgPos,
+    startView: { ...view },
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+  };
+  canvasWrap.classList.add("panning");
+}
+
+// Right-drag is one of the pan gestures, so the canvas must not answer it with
+// a context menu.
+svg.addEventListener("contextmenu", (e) => e.preventDefault());
+
 svg.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !imgW) return;
+  if (!imgW) return;
   const svgPos = svgFromClient(e.clientX, e.clientY);
+
+  // Pan: middle-drag (CAD/GIS), right-drag, or space+drag (design apps). The
+  // left button is left free for selecting, which is what it does everywhere
+  // else in this class of editor.
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld)) {
+    beginPanDrag(svgPos, e);
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0) return;
+
   const pointEl = e.target.closest(".gw-point");
   const edgeEl = !pointEl ? e.target.closest("[data-edge-id]") : null;
 
-  if (e.altKey) {
+  // Draw: ctrl/cmd-drag. NOT alt-drag -- nearly every Linux window manager
+  // grabs alt-drag to move the window itself, so the gesture never reaches
+  // the page. Alt is used here only for "subtract from selection", which is
+  // a modifier on a drag that starts on empty canvas, where a stolen gesture
+  // costs nothing.
+  if (e.ctrlKey || e.metaKey) {
     const fromId = pointEl ? Number(pointEl.dataset.pointId) : null;
     dragMode = "new-edge";
     dragData = {
@@ -624,8 +718,15 @@ svg.addEventListener("mousedown", (e) => {
     const edge = state.edges.find((ed) => ed.id === edgeId);
     if (!edge) return;
     if (e.shiftKey) {
-      selection.add(edge.a);
-      selection.add(edge.b);
+      // Toggles, like shift-click on a point -- shift-clicking a wall that's
+      // already selected has to be able to take it back out again.
+      if (selection.has(edge.a) && selection.has(edge.b)) {
+        selection.delete(edge.a);
+        selection.delete(edge.b);
+      } else {
+        selection.add(edge.a);
+        selection.add(edge.b);
+      }
       render();
       return;
     }
@@ -662,24 +763,22 @@ svg.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // Empty background.
-  if (e.shiftKey) {
-    dragMode = "marquee";
-    dragData = { startSvg: svgPos, startClientX: e.clientX, startClientY: e.clientY };
-    updateMarquee(svgPos, svgPos);
-    e.preventDefault();
-    return;
-  }
-
-  dragMode = "pan";
+  // Empty background: rubber-band select. A plain click that never turns into
+  // a drag is just an empty band, which clears the selection -- the same
+  // click-away-to-deselect it always did, now falling out of the selection
+  // rule instead of being a special case of the pan gesture.
+  dragMode = "marquee";
   dragData = {
-    invCtm0: svg.getScreenCTM().inverse(),
     startSvg: svgPos,
-    startView: { ...view },
     startClientX: e.clientX,
     startClientY: e.clientY,
+    mode: e.shiftKey ? "add" : e.altKey ? "subtract" : "replace",
+    baseSelection: new Set(selection),
   };
-  canvasWrap.classList.add("panning");
+  applyMarquee(svgPos, svgPos, dragData.mode, dragData.baseSelection);
+  updateMarquee(svgPos, svgPos);
+  render();
+  e.preventDefault();
 });
 
 window.addEventListener("mousemove", (e) => {
@@ -725,6 +824,8 @@ window.addEventListener("mousemove", (e) => {
 
   if (dragMode === "marquee") {
     updateMarquee(dragData.startSvg, svgPos);
+    applyMarquee(dragData.startSvg, svgPos, dragData.mode, dragData.baseSelection);
+    render();
     return;
   }
 
@@ -759,19 +860,9 @@ window.addEventListener("mouseup", (e) => {
     fuseTargetId = null;
   } else if (mode === "pan") {
     canvasWrap.classList.remove("panning");
-    if (!movedEnough(e) && selection.size) {
-      selection.clear();
-      render();
-    }
   } else if (mode === "marquee") {
     hideMarquee();
-    const x1 = Math.min(dragData.startSvg.x, svgPos.x);
-    const x2 = Math.max(dragData.startSvg.x, svgPos.x);
-    const y1 = Math.min(dragData.startSvg.y, svgPos.y);
-    const y2 = Math.max(dragData.startSvg.y, svgPos.y);
-    state.points.forEach((p) => {
-      if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) selection.add(p.id);
-    });
+    applyMarquee(dragData.startSvg, svgPos, dragData.mode, dragData.baseSelection);
     render();
   } else if (mode === "new-edge") {
     hideNewEdgePreview();
@@ -801,9 +892,76 @@ window.addEventListener("mouseup", (e) => {
   dragData = {};
 });
 
+const NUDGE_DIRECTIONS = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
 window.addEventListener("keydown", (e) => {
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+  // Space held = hand tool, for as long as it's down.
+  if (e.code === "Space" && !e.repeat) {
+    spaceHeld = true;
+    canvasWrap.classList.add("pan-ready");
+    e.preventDefault(); // space would otherwise scroll the page
+    return;
+  }
+
+  // Arrow keys nudge the selection, x10 with shift -- the usual step pair.
+  const nudge = NUDGE_DIRECTIONS[e.key];
+  if (nudge && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (!selection.size) return;
+    e.preventDefault();
+    const step = e.shiftKey ? NUDGE_COARSE_PX : NUDGE_PX;
+    const before = snapshot();
+    selection.forEach((id) => {
+      const p = getPoint(id);
+      if (!p) return;
+      p.x += nudge[0] * step;
+      p.y += nudge[1] * step;
+    });
+    commitIfChanged(before);
+    return;
+  }
+
+  // F8 toggles snapping -- the CAD convention (F8 ortho / F3 osnap), and the
+  // one thing here you'd otherwise have to leave the canvas to reach.
+  if (e.key === "F8") {
+    e.preventDefault();
+    toggleMagnetism();
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    if (e.shiftKey) selection.clear();
+    else selection = new Set(state.points.map((p) => p.id));
+    render();
+    return;
+  }
+
+  // Zoom from the keyboard, about the middle of the view. Ctrl+0 fits, which
+  // is the same thing as the reset the toolbar button does.
+  if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+    e.preventDefault();
+    resetView();
+    render();
+    return;
+  }
+  if (e.key === "+" || e.key === "=") {
+    e.preventDefault();
+    zoomBy(1 / 1.3);
+    return;
+  }
+  if (e.key === "-" || e.key === "_") {
+    e.preventDefault();
+    zoomBy(1.3);
+    return;
+  }
 
   if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
@@ -815,13 +973,15 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     redo();
   } else if (e.key === "Escape") {
-    if (dragMode === "new-edge") {
-      hideNewEdgePreview();
-      hideGuides();
+    if (dragMode === "marquee") {
+      hideMarquee();
+      selection = new Set(dragData.baseSelection);
       dragMode = null;
       dragData = {};
-    } else if (dragMode === "marquee") {
-      hideMarquee();
+      render();
+    } else if (dragMode === "new-edge") {
+      hideNewEdgePreview();
+      hideGuides();
       dragMode = null;
       dragData = {};
     } else if (dragMode === "move") {
@@ -837,6 +997,66 @@ window.addEventListener("keydown", (e) => {
     }
   }
 });
+
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  spaceHeld = false;
+  canvasWrap.classList.remove("pan-ready");
+});
+
+// Alt-tabbing away with space down would otherwise leave the hand tool stuck
+// on, since the keyup lands in another window.
+window.addEventListener("blur", () => {
+  spaceHeld = false;
+  canvasWrap.classList.remove("pan-ready");
+});
+
+// The single place the bindings are written down for the user -- kept next to
+// the handlers above so the two can't drift apart unnoticed.
+initShortcutHelp(helpBtn, [
+  {
+    title: "Select",
+    rows: [
+      ["click", "Select a point, or a wall (both its points)"],
+      ["Shift + click", "Add to / remove from the selection"],
+      ["drag", "Rubber-band select, replacing the selection"],
+      ["Shift + drag", "Rubber-band, adding to the selection"],
+      ["Alt + drag", "Rubber-band, removing from the selection"],
+      ["Alt + double-click", "On a wall: select the whole aligned wall run"],
+      ["Ctrl + A", "Select every point"],
+      ["Ctrl + Shift + A", "Deselect everything"],
+      ["Esc", "Clear the selection, or cancel the gesture under way"],
+    ],
+  },
+  {
+    title: "Edit",
+    rows: [
+      ["drag", "On a selected point or wall: move the whole selection"],
+      ["drag onto a point", "Drop a dragged point on another to fuse the two"],
+      ["Ctrl + drag", "From a point: draw a wall to another point, or to a new one"],
+      ["Ctrl + drag", "From empty canvas: drop a new free point"],
+      ["double-click", "On a wall: insert a point there, splitting it"],
+      ["arrows", "Nudge the selection by 1 px"],
+      ["Shift + arrows", "Nudge the selection by 10 px"],
+      ["Del / Backspace", "Delete the selection"],
+      ["Ctrl + Z", "Undo"],
+      ["Ctrl + Shift + Z", "Redo (Ctrl + Y also works)"],
+    ],
+  },
+  {
+    title: "View",
+    rows: [
+      ["scroll", "Zoom, centred on the cursor"],
+      ["+ / -", "Zoom in / out, centred on the view"],
+      ["Ctrl + 0", "Fit the whole plan in the view"],
+      ["Space + drag", "Pan"],
+      ["middle-drag", "Pan (right-drag works too)"],
+      ["double-click", "On empty canvas: reset the view"],
+      ["F8", "Turn magnetism (snapping) on or off"],
+      ["?", "Show this list (F1 too)"],
+    ],
+  },
+]);
 
 // --- Loading -----------------------------------------------------------
 
@@ -958,7 +1178,7 @@ function updateMagnetismBtn() {
   magnetismBtn.setAttribute("aria-pressed", String(magnetismEnabled));
   magnetismBtn.textContent = `Magnetism: ${magnetismEnabled ? "on" : "off"}`;
 }
-magnetismBtn.addEventListener("click", () => {
+function toggleMagnetism() {
   magnetismEnabled = !magnetismEnabled;
   try {
     localStorage.setItem("cubi-edit-magnetism", magnetismEnabled ? "1" : "0");
@@ -966,7 +1186,8 @@ magnetismBtn.addEventListener("click", () => {
     // ignore -- persistence is a convenience, not required for this toggle to work
   }
   updateMagnetismBtn();
-});
+}
+magnetismBtn.addEventListener("click", toggleMagnetism);
 updateMagnetismBtn();
 
 async function init() {

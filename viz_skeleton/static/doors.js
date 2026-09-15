@@ -11,6 +11,8 @@ const OPENING_SNAP_IMG_FRACTION = 0.02;
 const JAMB_VIEW_FRACTION = 0.004; // half-length of the tick drawn across each door end
 const HANDLE_VIEW_FRACTION = 0.006; // radius of the drag-to-resize handle at each door end
 const MIN_DOOR_WIDTH_PX = 2;
+const NUDGE_PX = 1;
+const NUDGE_COARSE_PX = 10;
 
 const svg = document.getElementById("canvas");
 const canvasWrap = document.getElementById("canvasWrap");
@@ -26,6 +28,7 @@ const resetDoorsBtn = document.getElementById("resetDoorsBtn");
 const resetViewBtn = document.getElementById("resetViewBtn");
 const continueToGeoBtn = document.getElementById("continueToGeoBtn");
 const backToEditLink = document.getElementById("backToEditLink");
+const helpBtn = document.getElementById("helpBtn");
 
 // --- State ----------------------------------------------------------------
 // The wall graph is FIXED here (that's the premise of this step: walls are
@@ -44,14 +47,15 @@ let undoStack = [];
 let redoStack = [];
 let defaultDoorWidth = DEFAULT_DOOR_WIDTH_PX;
 
-let bgImageEl, wallsLayer, doorsLayer;
+let bgImageEl, wallsLayer, doorsLayer, marqueeEl;
 let imgW = 0;
 let imgH = 0;
 let view = { x: 0, y: 0, w: 0, h: 0 };
 let query = "";
 
-let dragMode = null; // 'move' | 'pan' | null
+let dragMode = null; // 'move' | 'resize' | 'marquee' | 'pan' | null
 let dragData = {};
+let spaceHeld = false; // space = temporary hand tool, same as the wall editor
 
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg || "";
@@ -216,24 +220,32 @@ function svgFromClientUsingMatrix(clientX, clientY, invMatrix) {
   return pt.matrixTransform(invMatrix);
 }
 
+// Zooms by `factor` about a fixed point -- the cursor for the wheel, the
+// middle of the view for the keyboard. render() afterwards because the jamb
+// ticks and the resize handles are sized in view units.
+function zoomBy(factor, about) {
+  if (!imgW) return;
+  const curScale = view.w / imgW;
+  const newScale = Math.min(ZOOM_MAX_SCALE, Math.max(ZOOM_MIN_SCALE, curScale * factor));
+  if (newScale === curScale) return;
+  const cx = about ? about.x : view.x + view.w / 2;
+  const cy = about ? about.y : view.y + view.h / 2;
+  const fracX = (cx - view.x) / view.w;
+  const fracY = (cy - view.y) / view.h;
+  view.w = imgW * newScale;
+  view.h = imgH * newScale;
+  view.x = cx - fracX * view.w;
+  view.y = cy - fracY * view.h;
+  applyView();
+  render();
+}
+
 svg.addEventListener(
   "wheel",
   (e) => {
     if (!imgW) return;
     e.preventDefault();
-    const cursor = svgFromClient(e.clientX, e.clientY);
-    const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;
-    const curScale = view.w / imgW;
-    const newScale = Math.min(ZOOM_MAX_SCALE, Math.max(ZOOM_MIN_SCALE, curScale * factor));
-    if (newScale === curScale) return;
-    const fracX = (cursor.x - view.x) / view.w;
-    const fracY = (cursor.y - view.y) / view.h;
-    view.w = imgW * newScale;
-    view.h = imgH * newScale;
-    view.x = cursor.x - fracX * view.w;
-    view.y = cursor.y - fracY * view.h;
-    applyView();
-    render(); // the jamb ticks are sized in view units, so they follow the zoom
+    zoomBy(e.deltaY < 0 ? 1 / 1.15 : 1.15, svgFromClient(e.clientX, e.clientY));
   },
   { passive: false }
 );
@@ -256,6 +268,11 @@ function buildSvgSkeleton() {
 
   doorsLayer = document.createElementNS(SVGNS, "g");
   svg.appendChild(doorsLayer);
+
+  marqueeEl = document.createElementNS(SVGNS, "rect");
+  marqueeEl.setAttribute("class", "gw-marquee");
+  marqueeEl.style.display = "none";
+  svg.appendChild(marqueeEl);
 
   // Walls never change on this page, so they're drawn once: a wide invisible
   // hit line (the double-click target that adds a door) under the visible one.
@@ -350,6 +367,34 @@ function updateToolbarState() {
   continueToGeoBtn.disabled = graph.edges.length === 0;
 }
 
+// --- Marquee selection -----------------------------------------------------
+// Same rules as the wall editor: plain drag replaces the selection, shift
+// adds, alt subtracts, applied live as the band is dragged. A door counts as
+// caught when its centre is inside the band.
+
+function updateMarquee(p1, p2) {
+  marqueeEl.setAttribute("x", Math.min(p1.x, p2.x));
+  marqueeEl.setAttribute("y", Math.min(p1.y, p2.y));
+  marqueeEl.setAttribute("width", Math.abs(p2.x - p1.x));
+  marqueeEl.setAttribute("height", Math.abs(p2.y - p1.y));
+  marqueeEl.style.display = "";
+}
+
+function applyMarquee(p1, p2, mode, base) {
+  const x1 = Math.min(p1.x, p2.x);
+  const x2 = Math.max(p1.x, p2.x);
+  const y1 = Math.min(p1.y, p2.y);
+  const y2 = Math.max(p1.y, p2.y);
+  const inside = new Set();
+  doors.forEach((d) => {
+    const span = doorSpan(d);
+    if (span && span.cx >= x1 && span.cx <= x2 && span.cy >= y1 && span.cy <= y2) inside.add(d.id);
+  });
+  if (mode === "add") selection = new Set([...base, ...inside]);
+  else if (mode === "subtract") selection = new Set([...base].filter((id) => !inside.has(id)));
+  else selection = inside;
+}
+
 // --- Editing ---------------------------------------------------------------
 
 function addDoorAt(x, y) {
@@ -397,9 +442,29 @@ function movedEnough(e) {
   );
 }
 
+// Right-drag pans, so no context menu on the canvas.
+svg.addEventListener("contextmenu", (e) => e.preventDefault());
+
 svg.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !imgW) return;
+  if (!imgW) return;
   const svgPos = svgFromClient(e.clientX, e.clientY);
+
+  // Pan: middle-drag, right-drag or space+drag -- the left button selects.
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && spaceHeld)) {
+    dragMode = "pan";
+    dragData = {
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startView: { ...view },
+      invCtm0: svg.getScreenCTM().inverse(),
+      startSvg: svgPos,
+    };
+    canvasWrap.classList.add("panning");
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0) return;
+
   const handleEl = e.target.closest(".gw-door-handle");
   const doorEl = e.target.closest("[data-door-id]");
 
@@ -440,15 +505,19 @@ svg.addEventListener("mousedown", (e) => {
     return;
   }
 
-  dragMode = "pan";
+  // Empty background: rubber-band select.
+  dragMode = "marquee";
   dragData = {
+    startSvg: svgPos,
     startClientX: e.clientX,
     startClientY: e.clientY,
-    startView: { ...view },
-    invCtm0: svg.getScreenCTM().inverse(),
-    startSvg: svgPos,
+    mode: e.shiftKey ? "add" : e.altKey ? "subtract" : "replace",
+    baseSelection: new Set(selection),
   };
-  canvasWrap.classList.add("panning");
+  applyMarquee(svgPos, svgPos, dragData.mode, dragData.baseSelection);
+  updateMarquee(svgPos, svgPos);
+  render();
+  e.preventDefault();
 });
 
 window.addEventListener("mousemove", (e) => {
@@ -485,6 +554,14 @@ window.addEventListener("mousemove", (e) => {
     return;
   }
 
+  if (dragMode === "marquee") {
+    const svgPos = svgFromClient(e.clientX, e.clientY);
+    updateMarquee(dragData.startSvg, svgPos);
+    applyMarquee(dragData.startSvg, svgPos, dragData.mode, dragData.baseSelection);
+    render();
+    return;
+  }
+
   if (dragMode === "pan") {
     const cur = svgFromClientUsingMatrix(e.clientX, e.clientY, dragData.invCtm0);
     const start = svgFromClientUsingMatrix(dragData.startClientX, dragData.startClientY, dragData.invCtm0);
@@ -502,8 +579,9 @@ window.addEventListener("mouseup", (e) => {
 
   if (mode === "move" || mode === "resize") {
     commitIfChanged(dragData.beforeSnapshot);
-  } else if (mode === "pan" && !movedEnough(e) && selection.size) {
-    selection.clear();
+  } else if (mode === "marquee") {
+    marqueeEl.style.display = "none";
+    applyMarquee(dragData.startSvg, svgFromClient(e.clientX, e.clientY), dragData.mode, dragData.baseSelection);
     render();
   }
 });
@@ -519,9 +597,68 @@ svg.addEventListener("dblclick", (e) => {
   resetView();
 });
 
+const NUDGE_DIRECTIONS = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
 window.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+
+  if (e.code === "Space" && !e.repeat) {
+    spaceHeld = true;
+    canvasWrap.classList.add("pan-ready");
+    e.preventDefault();
+    return;
+  }
+
+  // Arrows nudge the selected doors ALONG their wall -- a door has one degree
+  // of freedom, so the arrow's direction is projected onto the wall it sits
+  // on: "up" slides a door up a vertical wall and does nothing on a
+  // horizontal one, which is what pressing it looks like it should do.
+  const nudge = NUDGE_DIRECTIONS[e.key];
+  if (nudge && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (!selection.size) return;
+    e.preventDefault();
+    const step = e.shiftKey ? NUDGE_COARSE_PX : NUDGE_PX;
+    const before = snapshot();
+    doors.forEach((d) => {
+      if (!selection.has(d.id)) return;
+      const g = edgeGeom(d.edgeId);
+      if (!g) return;
+      const along = (nudge[0] * g.ux + nudge[1] * g.uy) * step;
+      if (!along) return;
+      d.t = clampT(d.t + along / g.len, d.width, g.len);
+    });
+    commitIfChanged(before);
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    if (e.shiftKey) selection.clear();
+    else selection = new Set(doors.map((d) => d.id));
+    render();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+    e.preventDefault();
+    resetView();
+    return;
+  }
+  if (e.key === "+" || e.key === "=") {
+    e.preventDefault();
+    zoomBy(1 / 1.3);
+    return;
+  }
+  if (e.key === "-" || e.key === "_") {
+    e.preventDefault();
+    zoomBy(1.3);
+    return;
+  }
 
   if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
@@ -539,10 +676,29 @@ window.addEventListener("keydown", (e) => {
     redo();
     return;
   }
-  if (e.key === "Escape" && selection.size) {
-    selection.clear();
-    render();
+  if (e.key === "Escape") {
+    if (dragMode === "marquee") {
+      marqueeEl.style.display = "none";
+      selection = new Set(dragData.baseSelection);
+      dragMode = null;
+      dragData = {};
+      render();
+    } else if (selection.size) {
+      selection.clear();
+      render();
+    }
   }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  spaceHeld = false;
+  canvasWrap.classList.remove("pan-ready");
+});
+
+window.addEventListener("blur", () => {
+  spaceHeld = false;
+  canvasWrap.classList.remove("pan-ready");
 });
 
 // --- Toolbar ---------------------------------------------------------------
@@ -596,6 +752,47 @@ continueToGeoBtn.addEventListener("click", () => {
   }
   window.location.href = "/geo";
 });
+
+initShortcutHelp(helpBtn, [
+  {
+    title: "Select",
+    rows: [
+      ["click", "Select a door"],
+      ["Shift + click", "Add to / remove from the selection"],
+      ["drag", "Rubber-band select, replacing the selection"],
+      ["Shift + drag", "Rubber-band, adding to the selection"],
+      ["Alt + drag", "Rubber-band, removing from the selection"],
+      ["Ctrl + A", "Select every door"],
+      ["Ctrl + Shift + A", "Deselect everything"],
+      ["Esc", "Clear the selection, or cancel the gesture under way"],
+    ],
+  },
+  {
+    title: "Edit",
+    rows: [
+      ["drag", "Move a door: it follows the walls, never leaves them"],
+      ["drag an end", "On the selected door: resize it, the other end staying put"],
+      ["double-click", "On a wall: add a door there"],
+      ["arrows", "Slide the selected doors 1 px along their wall"],
+      ["Shift + arrows", "Slide them 10 px along their wall"],
+      ["Del / Backspace", "Delete the selection"],
+      ["Ctrl + Z", "Undo"],
+      ["Ctrl + Shift + Z", "Redo (Ctrl + Y also works)"],
+    ],
+  },
+  {
+    title: "View",
+    rows: [
+      ["scroll", "Zoom, centred on the cursor"],
+      ["+ / -", "Zoom in / out, centred on the view"],
+      ["Ctrl + 0", "Fit the whole plan in the view"],
+      ["Space + drag", "Pan"],
+      ["middle-drag", "Pan (right-drag works too)"],
+      ["double-click", "On empty canvas: reset the view"],
+      ["?", "Show this list (F1 too)"],
+    ],
+  },
+]);
 
 // --- Loading ---------------------------------------------------------------
 

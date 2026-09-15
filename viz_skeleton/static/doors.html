@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/edit.css" />
   <link rel="stylesheet" href="/static/doors.css" />
+  <link rel="stylesheet" href="/static/help.css" />
 </head>
 <body>
   <header class="border-bottom bg-body-tertiary px-3 py-1 d-flex align-items-center justify-content-between">
@@ -27,6 +28,7 @@
       <button id="resetDoorsBtn" type="button" class="btn btn-outline-secondary btn-sm" disabled>Reset to detected</button>
       <button id="resetViewBtn" type="button" class="btn btn-outline-secondary btn-sm" disabled>Reset view</button>
       <button id="continueToGeoBtn" type="button" class="btn btn-primary btn-sm" disabled>Continue to export &rarr;</button>
+      <button id="helpBtn" type="button" class="btn btn-outline-secondary btn-sm" title="Keyboard & mouse shortcuts (?)" aria-expanded="false">?</button>
       <span class="d-flex align-items-center gap-2 ms-auto">
         <span id="statusSpinner" class="spinner-border spinner-border-sm text-primary hidden" role="status" aria-hidden="true"></span>
         <span id="status" class="status small text-muted text-truncate"></span>
@@ -38,7 +40,7 @@
     <div class="card">
       <div class="card-header d-flex align-items-center justify-content-between gap-2">
         <span id="selectionCaption">No selection</span>
-        <span class="zoom-hint text-muted small">double-click a wall to add a door &middot; drag a door to move it &middot; drag either end of a selected door to resize &middot; scroll to zoom, drag to pan</span>
+        <span class="zoom-hint text-muted small">double-click a wall to add a door &middot; drag a door to move it &middot; drag its ends to resize &middot; <kbd>?</kbd> for shortcuts</span>
       </div>
       <div class="img-wrap" id="canvasWrap">
         <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -46,6 +48,7 @@
     </div>
   </main>
 
+  <script src="/static/help.js"></script>
   <script src="/static/doors.js"></script>
 </body>
 </html>
